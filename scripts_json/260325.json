@@ -1,0 +1,44 @@
+{
+  "title": "결국 다시 돌아온 라면",
+  "hook_type": "공감",
+  "segments": [
+    {
+      "time": "00~03s",
+      "narration": "요즘 라면 종류 왜 이렇게 많냐… 뭐 먹을지 더 고민됨",
+      "on_screen_text": "라면고민",
+      "visual_tag": ["편의점음식", "공감가는", "비비드컬러"],
+      "sfx": "whoosh"
+    },
+    {
+      "time": "03~08s",
+      "narration": "신상 라면 이것저것 먹어봤는데",
+      "on_screen_text": "신상도전",
+      "visual_tag": ["음식준비중", "현실적인", "음식풍부한색감"],
+      "sfx": "없음"
+    },
+    {
+      "time": "08~13s",
+      "narration": "맛은 있는데… 뭔가 계속 손이 안 가",
+      "on_screen_text": "2%부족",
+      "visual_tag": ["혼자식사", "허탈한", "따뜻한계열"],
+      "sfx": "boing"
+    },
+    {
+      "time": "13~18s",
+      "narration": "결국 다시 꺼내게 되는 그 라면",
+      "on_screen_text": "결국이거",
+      "visual_tag": ["제품사용중", "공감가는", "골드브라운"],
+      "sfx": "ding"
+    },
+    {
+      "time": "18~23s",
+      "narration": "안성탕면… 이 묘하게 담백한 국물, 이게 계속 생각남",
+      "on_screen_text": "근본맛",
+      "visual_tag": ["라면조리", "따뜻한", "음식풍부한색감"],
+      "sfx": "없음"
+    }
+  ],
+  "closing_line": "이게 근본이지",
+  "description_cta": "라면 고민될 때 참고용으로 정리해뒀어요.",
+  "disclaimer": "이 영상은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다."
+}
