@@ -1,19 +1,18 @@
 # =============================================
-# WISSLIST - 영상 자동 조립 v5
+# WISSLIST - 영상 자동 조립 v6
 # 실행: python D:\WISSLIST\scripts\assemble_video.py
 #
-# v5 수정:
-#  - Windows Python 3.12 asyncio 오류 해결
-#    (asyncio.run() 루프 반복 → 단일 async 함수로 통합)
+# v6 핵심 변경:
+#  - asyncio 완전 제거 → edge-tts CLI subprocess 호출
+#    (Windows Python 3.12 socketpair 오류 근본 해결)
 #  - GIF 우선 매칭 + 루프 처리
 #  - 오디오 실제 길이 기준 클립 맞춤
-#  - 고화질 출력 (bitrate 4000k, crf 18)
+#  - 고화질 출력
 # =============================================
 
-import asyncio
 import json
 import sys
-import os
+import subprocess
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -49,37 +48,43 @@ except ModuleNotFoundError:
 
 
 # ══════════════════════════════════════════════════════════════════
-# TTS — Windows asyncio 안전 버전
-# asyncio.run()을 루프 안에서 반복 호출하면 Win32에서 crash
-# → 모든 segment를 단일 async 함수에서 한 번에 처리
+# TTS — asyncio 완전 제거, subprocess로 edge-tts CLI 직접 호출
 # ══════════════════════════════════════════════════════════════════
-async def _generate_all_tts(segments: list, voice: str = "ko-KR-SunHiNeural"):
-    """모든 segment의 TTS를 비동기로 한 번에 생성"""
-    import edge_tts
-
-    tasks = []
-    for i, seg in enumerate(segments):
-        ap = AUDIO_DIR / f"seg_{i:02d}.mp3"
-        seg["audio_path"] = str(ap)
-        comm = edge_tts.Communicate(
-            text=seg["narration"], voice=voice, rate="+5%"
+def make_tts(text: str, out_path: Path, voice: str = "ko-KR-SunHiNeural"):
+    """
+    edge-tts CLI를 subprocess로 실행.
+    asyncio / socket 문제와 완전히 무관하게 동작.
+    """
+    cmd = [
+        "edge-tts",
+        "--voice", voice,
+        "--rate", "+5%",        # 약간 빠르게 (자연스러운 쇼츠 속도)
+        "--text", text,
+        "--write-media", str(out_path),
+    ]
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
-        tasks.append(comm.save(str(ap)))
-
-    # 모든 TTS 동시 생성
-    await asyncio.gather(*tasks)
-
-
-def run_tts(segments: list, voice: str = "ko-KR-SunHiNeural"):
-    """Windows 호환 asyncio 실행 — 단 1회만 호출"""
-    # Python 3.10+ Windows 에서 ProactorEventLoop 문제 우회
-    if sys.platform == "win32":
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    asyncio.run(_generate_all_tts(segments, voice))
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip())
+        size_kb = out_path.stat().st_size // 1024
+        print(f"  🎙️  {out_path.name}  ({size_kb}KB)")
+    except FileNotFoundError:
+        # edge-tts 명령이 PATH에 없는 경우 python -m edge_tts 로 재시도
+        cmd2 = [sys.executable, "-m", "edge_tts"] + cmd[1:]
+        result = subprocess.run(cmd2, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            raise RuntimeError(f"edge-tts 실패: {result.stderr.strip()}")
+        size_kb = out_path.stat().st_size // 1024
+        print(f"  🎙️  {out_path.name}  ({size_kb}KB)")
 
 
 def get_audio_duration(path: str) -> float:
-    clip = AudioFileClip(path)
+    clip = AudioFileClip(str(path))
     dur  = clip.duration
     clip.close()
     return dur
@@ -157,35 +162,29 @@ def _fallback_pexels(query: str):
 # ══════════════════════════════════════════════════════════════════
 # 클립 생성
 # ══════════════════════════════════════════════════════════════════
-def _set_duration(clip, duration):
-    if MOVIEPY_V == 1:
-        return clip.set_duration(duration)
-    else:
-        return clip.with_duration(duration)
+def _v1_duration(clip, d):  return clip.set_duration(d)
+def _v2_duration(clip, d):  return clip.with_duration(d)
+def _set_dur(clip, d):
+    return _v1_duration(clip, d) if MOVIEPY_V == 1 else _v2_duration(clip, d)
 
+def _v1_resize(clip, h):    return clip.resize(height=h)
+def _v2_resize(clip, h):    return clip.resized(height=h)
+def _resize_h(clip, h):
+    return _v1_resize(clip, h) if MOVIEPY_V == 1 else _v2_resize(clip, h)
 
-def _resize(clip, height):
-    if MOVIEPY_V == 1:
-        return clip.resize(height=height)
-    else:
-        return clip.resized(height=height)
-
+def _set_pos(clip, pos):
+    return clip.set_position(pos) if MOVIEPY_V == 1 else clip.with_position(pos)
 
 def _pad_to_vertical(clip, duration):
-    """1080x1920 맞춤 + 좌우 검정 패딩"""
-    clip = _set_duration(clip, duration)
-    w = clip.size[0]
-
+    """1080×1920 맞춤 패딩"""
+    clip = _set_dur(clip, duration)
+    w    = clip.size[0]
     if w < TARGET_W:
         bg    = ColorClip((TARGET_W, TARGET_H), color=(0,0,0), duration=duration)
         x_off = (TARGET_W - w) // 2
-        if MOVIEPY_V == 1:
-            clip = clip.set_position((x_off, 0))
-        else:
-            clip = clip.with_position((x_off, 0))
-        clip = CompositeVideoClip([bg, clip], size=(TARGET_W, TARGET_H))
-        clip = _set_duration(clip, duration)
-
+        clip  = _set_pos(clip, (x_off, 0))
+        clip  = CompositeVideoClip([bg, clip], size=(TARGET_W, TARGET_H))
+        clip  = _set_dur(clip, duration)
     return clip
 
 
@@ -193,42 +192,36 @@ def make_clip(media_path: str, duration: float):
     ext = Path(media_path).suffix.lower()
 
     if ext in (".jpg", ".jpeg", ".png", ".webp"):
-        # ── 정지 이미지 ──────────────────────────────────────────
-        clip = ImageClip(media_path) if MOVIEPY_V == 1 \
-               else ImageClip(media_path, duration=duration)
-        clip = _resize(clip, TARGET_H)
+        clip = (ImageClip(media_path)
+                if MOVIEPY_V == 1
+                else ImageClip(media_path, duration=duration))
+        clip = _resize_h(clip, TARGET_H)
         clip = _pad_to_vertical(clip, duration)
 
     elif ext == ".gif":
-        # ── GIF — duration만큼 루프 ───────────────────────────────
         try:
             raw   = VideoFileClip(media_path)
             loops = max(1, int(duration / raw.duration) + 1)
             if MOVIEPY_V == 1:
                 from moviepy.video.fx.all import loop as fx_loop
-                clip = fx_loop(raw, n=loops)
-                clip = clip.subclip(0, duration)
+                clip = fx_loop(raw, n=loops).subclip(0, duration)
             else:
                 from moviepy import vfx
-                clip = raw.with_effects([vfx.Loop(n=loops)])
-                clip = clip.subclipped(0, duration)
-            clip = _resize(clip, TARGET_H)
+                clip = raw.with_effects([vfx.Loop(n=loops)]).subclipped(0, duration)
+            clip = _resize_h(clip, TARGET_H)
             clip = _pad_to_vertical(clip, duration)
         except Exception as e:
             print(f"    ⚠️  GIF 로드 실패({e}) → 검정 배경")
             clip = ColorClip((TARGET_W, TARGET_H), color=(0,0,0), duration=duration)
 
     else:
-        # ── 영상 ─────────────────────────────────────────────────
         try:
-            raw      = VideoFileClip(media_path)
-            use_dur  = min(duration, raw.duration)
-            if MOVIEPY_V == 1:
-                clip = raw.subclip(0, use_dur)
-            else:
-                clip = raw.subclipped(0, use_dur)
-            clip = _resize(clip, TARGET_H)
-            clip = _pad_to_vertical(clip, duration)
+            raw     = VideoFileClip(media_path)
+            use_dur = min(duration, raw.duration)
+            clip    = (raw.subclip(0, use_dur) if MOVIEPY_V == 1
+                       else raw.subclipped(0, use_dur))
+            clip    = _resize_h(clip, TARGET_H)
+            clip    = _pad_to_vertical(clip, duration)
         except Exception as e:
             print(f"    ⚠️  영상 로드 실패({e}) → 검정 배경")
             clip = ColorClip((TARGET_W, TARGET_H), color=(0,0,0), duration=duration)
@@ -262,7 +255,6 @@ def add_subtitle(video_clip, text: str, duration: float):
                 duration=duration,
             )
             .with_position(("center", 0.72), relative=True))
-
         return CompositeVideoClip([video_clip, txt])
     except Exception as e:
         print(f"    ⚠️  자막 실패({e}), 자막 없이 계속")
@@ -292,15 +284,14 @@ def assemble(script_path=None):
 
     segments = script["segments"]
 
-    # ── 1. TTS 전체 한 번에 생성 (Windows asyncio 안전) ───────────
+    # ── 1. TTS 생성 (subprocess, asyncio 없음) ────────────────────
     print("\n[1/3] 나레이션 생성 중...")
-    run_tts(segments, voice="ko-KR-SunHiNeural")
-
-    # 오디오 길이 측정
     for i, seg in enumerate(segments):
-        seg["audio_duration"] = get_audio_duration(seg["audio_path"])
-        size_kb = Path(seg["audio_path"]).stat().st_size // 1024
-        print(f"  🎙️  seg_{i:02d}.mp3  ({size_kb}KB) → {seg['audio_duration']:.2f}초")
+        ap = AUDIO_DIR / f"seg_{i:02d}.mp3"
+        make_tts(seg["narration"], ap)
+        seg["audio_path"]     = str(ap)
+        seg["audio_duration"] = get_audio_duration(str(ap))
+        print(f"       → 실제 길이: {seg['audio_duration']:.2f}초")
 
     # ── 2. 클립 조립 ──────────────────────────────────────────────
     print("\n[2/3] 클립 조립 중...")
@@ -324,10 +315,8 @@ def assemble(script_path=None):
         # 오디오
         try:
             audio = AudioFileClip(seg["audio_path"])
-            if MOVIEPY_V == 1:
-                video = video.set_audio(audio)
-            else:
-                video = video.with_audio(audio)
+            video = (video.set_audio(audio) if MOVIEPY_V == 1
+                     else video.with_audio(audio))
         except Exception as e:
             print(f"    ⚠️  오디오 실패: {e}")
 
