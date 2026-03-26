@@ -97,14 +97,37 @@ def get_audio_duration(path: str) -> float:
 # TTS
 # ══════════════════════════════════════════════════════════════════
 def make_tts(text: str, out_path: Path, voice: str = "ko-KR-SunHiNeural"):
-    base_args = ["--voice", voice, "--rate", "+5%",
-                 "--text", text, "--write-media", str(out_path)]
+    """
+    edge-tts로 TTS 생성.
+    --text 인자로 한국어를 직접 넘기면 Windows subprocess에서
+    인코딩 오류가 발생할 수 있으므로, 텍스트를 UTF-8 파일로 저장 후
+    --file 옵션으로 전달. 이스케이프/인코딩 문제 완전 차단.
+    """
+    # 텍스트를 UTF-8 임시 파일로 저장
+    txt_path = out_path.with_suffix(".txt")
+    txt_path.write_text(text, encoding="utf-8")
+
+    base_args = [
+        "--voice", voice,
+        "--rate", "+5%",
+        "--file", str(txt_path),        # ← --text 대신 --file 사용
+        "--write-media", str(out_path),
+    ]
+
     code, _, _ = run_cmd(["edge-tts"] + base_args, timeout=30)
     if code != 0:
         code2, _, err2 = run_cmd(
             [sys.executable, "-m", "edge_tts"] + base_args, timeout=30)
         if code2 != 0:
-            raise RuntimeError(f"TTS 실패. pip install edge-tts\n{err2[:200]}")
+            raise RuntimeError(
+                f"TTS 실패. pip install edge-tts\n{err2[:300]}")
+
+    # 임시 텍스트 파일 삭제
+    try:
+        txt_path.unlink()
+    except Exception:
+        pass
+
     print(f"  🎙️  {out_path.name}  ({out_path.stat().st_size//1024}KB)")
 
 
