@@ -1,12 +1,12 @@
 # =============================================
-# WISSLIST - 영상 자동 조립 v11
+# WISSLIST - 영상 자동 조립 v12
 # 실행: python D:\WISSLIST\scripts\assemble_video.py
 #
-# v11 핵심 수정:
-#  - drawtext text= 이스케이프 문제 완전 해결
-#    → 자막 텍스트를 임시 파일로 저장 후
-#      textfile= 파라미터로 전달 (이스케이프 불필요)
-#  - fontfile 경로 문제도 동시 해결
+# v12 핵심 변경:
+#  - drawtext 필터 완전 제거 (버전 호환 문제)
+#  - PIL로 자막 PNG 생성 → ffmpeg overlay 합성
+#    (이스케이프 문제 없음, 한국어 완벽 지원)
+#  - 2단계: raw clip 생성 → subtitle overlay
 # =============================================
 
 import json
@@ -14,8 +14,8 @@ import sys
 import subprocess
 import shutil
 import random
-import tempfile
 from pathlib import Path
+from PIL import Image, ImageDraw, ImageFont
 
 sys.path.insert(0, str(Path(__file__).parent))
 from config import BASE_DIR
@@ -29,7 +29,24 @@ TMP_DIR     = BASE / "tmp_clips"
 BGM_DIR     = BASE / "bgm"
 
 TARGET_W, TARGET_H = 1080, 1920
-FONT_PATH = r"C:\Windows\Fonts\malgun.ttf"   # 맑은 고딕
+
+# 한국어 폰트 경로 목록 (순서대로 시도)
+FONT_CANDIDATES = [
+    r"C:\Windows\Fonts\malgun.ttf",    # 맑은 고딕
+    r"C:\Windows\Fonts\malgunbd.ttf",  # 맑은 고딕 Bold
+    r"C:\Windows\Fonts\gulim.ttc",     # 굴림
+    r"C:\Windows\Fonts\arial.ttf",     # 폴백
+]
+
+
+def get_font(size: int = 55):
+    for fp in FONT_CANDIDATES:
+        if Path(fp).exists():
+            try:
+                return ImageFont.truetype(fp, size)
+            except Exception:
+                continue
+    return ImageFont.load_default()
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -54,9 +71,6 @@ def run_cmd(cmd: list, timeout: int = 120) -> tuple:
         return 1, "", str(e)
 
 
-# ══════════════════════════════════════════════════════════════════
-# ffmpeg 확인
-# ══════════════════════════════════════════════════════════════════
 def check_ffmpeg():
     code, _, _ = run_cmd(["ffmpeg", "-version"], timeout=10)
     if code != 0:
@@ -71,7 +85,7 @@ def check_ffmpeg():
 def make_tts(text: str, out_path: Path, voice: str = "ko-KR-SunHiNeural"):
     base_args = ["--voice", voice, "--rate", "+5%",
                  "--text", text, "--write-media", str(out_path)]
-    code, _, err = run_cmd(["edge-tts"] + base_args, timeout=30)
+    code, _, _ = run_cmd(["edge-tts"] + base_args, timeout=30)
     if code != 0:
         code2, _, err2 = run_cmd(
             [sys.executable, "-m", "edge_tts"] + base_args, timeout=30)
@@ -91,6 +105,44 @@ def get_audio_duration(path: str) -> float:
         return float(out.strip())
     except ValueError:
         return 2.0
+
+
+# ══════════════════════════════════════════════════════════════════
+# PIL 자막 PNG 생성
+# drawtext 대신 PIL로 자막 이미지 생성 → 이스케이프 문제 없음
+# ══════════════════════════════════════════════════════════════════
+def make_subtitle_png(text: str, out_path: Path,
+                      font_size: int = 55,
+                      width: int = TARGET_W,
+                      height: int = TARGET_H):
+    """
+    자막 텍스트를 PNG로 렌더링.
+    배경 투명, 흰 글자 + 검정 외곽선.
+    하단 73% 위치에 배치.
+    """
+    img  = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    font = get_font(font_size)
+
+    # 텍스트 크기 계산
+    bbox = draw.textbbox((0, 0), text, font=font)
+    tw   = bbox[2] - bbox[0]
+    th   = bbox[3] - bbox[1]
+
+    x = (width - tw) // 2
+    y = int(height * 0.73)
+
+    # 외곽선 (검정 8방향)
+    for dx in [-3, -2, -1, 0, 1, 2, 3]:
+        for dy in [-3, -2, -1, 0, 1, 2, 3]:
+            if dx == 0 and dy == 0:
+                continue
+            draw.text((x + dx, y + dy), text, font=font, fill=(0, 0, 0, 255))
+
+    # 본문 (흰색)
+    draw.text((x, y), text, font=font, fill=(255, 255, 255, 255))
+
+    img.save(str(out_path), "PNG")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -152,49 +204,10 @@ def _fallback_pexels(query: str):
 
 
 # ══════════════════════════════════════════════════════════════════
-# drawtext 필터 생성
-# 핵심: 텍스트를 파일로 저장 → textfile= 로 전달
-#       → text= 이스케이프 문제 완전 해결
+# STEP A: raw clip (자막 없음) — 단순 ffmpeg, 안정적
 # ══════════════════════════════════════════════════════════════════
-def make_drawtext_filter(subtitle: str, textfile_path: Path) -> str:
-    """
-    자막 텍스트를 UTF-8 파일로 저장 후 textfile= 파라미터 사용.
-    text= 에서 발생하는 한국어/특수문자 이스케이프 문제 원천 차단.
-    """
-    # 텍스트 파일 저장 (UTF-8)
-    textfile_path.write_text(subtitle, encoding="utf-8")
-
-    # textfile 경로: Windows 역슬래시 → 슬래시, 콜론 이스케이프
-    tf = str(textfile_path).replace("\\", "/").replace(":", "\\:")
-
-    # 폰트 경로 이스케이프
-    fp = FONT_PATH.replace("\\", "/").replace(":", "\\:")
-    font_opt = f"fontfile={fp}" if Path(FONT_PATH).exists() else "font=Arial"
-
-    return (
-        f"drawtext={font_opt}"
-        f":textfile={tf}"
-        f":fontsize=55"
-        f":fontcolor=white"
-        f":borderw=3"
-        f":bordercolor=black"
-        f":x=(w-text_w)/2"
-        f":y=h*0.73"
-        f":reload=1"
-    )
-
-
-# ══════════════════════════════════════════════════════════════════
-# 세그먼트 클립 생성
-# ══════════════════════════════════════════════════════════════════
-def make_segment_clip(media_path, audio_path: str,
-                      subtitle: str, duration: float,
-                      out_path: Path, idx: int) -> bool:
-
-    # 자막 텍스트파일 경로
-    textfile = TMP_DIR / f"sub_{idx:02d}.txt"
-    drawtext = make_drawtext_filter(subtitle, textfile)
-
+def make_raw_clip(media_path, audio_path: str,
+                  duration: float, out_path: Path) -> bool:
     ext = Path(media_path).suffix.lower() if media_path else ""
 
     scale_pad = (
@@ -214,34 +227,82 @@ def make_segment_clip(media_path, audio_path: str,
     ]
 
     if not media_path or not Path(media_path).exists():
-        vf  = drawtext
         cmd = (["ffmpeg", "-y",
                 "-f", "lavfi",
                 "-i", f"color=black:s={TARGET_W}x{TARGET_H}:d={duration:.3f}",
                 "-i", audio_path,
-                "-vf", vf]
+                "-vf", "null"]
                + common_out)
 
     elif ext in (".jpg", ".jpeg", ".png", ".webp"):
-        vf  = f"{scale_pad},{drawtext}"
         cmd = (["ffmpeg", "-y",
                 "-loop", "1", "-i", media_path,
                 "-i", audio_path,
-                "-vf", vf]
+                "-vf", scale_pad]
                + common_out)
 
-    else:   # gif / mp4 등
-        vf  = f"{scale_pad},{drawtext}"
+    else:  # gif / mp4
         cmd = (["ffmpeg", "-y",
                 "-stream_loop", "-1", "-i", media_path,
                 "-i", audio_path,
-                "-vf", vf]
+                "-vf", scale_pad]
                + common_out)
 
     code, _, err = run_cmd(cmd, timeout=60)
     if code != 0:
-        print(f"    ⚠️  clip 생성 실패:\n{err[-500:]}")
+        print(f"    ⚠️  raw clip 실패:\n{err[-400:]}")
         return False
+    return True
+
+
+# ══════════════════════════════════════════════════════════════════
+# STEP B: 자막 PNG overlay — PIL + ffmpeg overlay 필터
+# ══════════════════════════════════════════════════════════════════
+def overlay_subtitle(raw_path: Path, subtitle_png: Path,
+                     out_path: Path) -> bool:
+    """
+    raw clip 위에 자막 PNG를 overlay.
+    overlay 필터는 복잡한 이스케이프 없이 경로만 전달.
+    """
+    # PNG 경로: 역슬래시 → 슬래시 (ffmpeg 호환)
+    png_path = str(subtitle_png).replace("\\", "/")
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(raw_path),
+        "-i", png_path,
+        "-filter_complex", "overlay=0:0",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+        "-c:a", "copy",
+        "-pix_fmt", "yuv420p",
+        str(out_path),
+    ]
+    code, _, err = run_cmd(cmd, timeout=60)
+    if code != 0:
+        print(f"    ⚠️  subtitle overlay 실패:\n{err[-300:]}")
+        # 실패 시 자막 없는 버전을 그냥 사용
+        shutil.copy(str(raw_path), str(out_path))
+    return True
+
+
+def make_segment_clip(media_path, audio_path: str,
+                      subtitle: str, duration: float,
+                      out_path: Path, idx: int) -> bool:
+
+    raw_path = TMP_DIR / f"raw_{idx:02d}.mp4"
+    sub_png  = TMP_DIR / f"sub_{idx:02d}.png"
+
+    # 1. raw clip 생성
+    if not make_raw_clip(media_path, audio_path, duration, raw_path):
+        return False
+
+    # 2. 자막 PNG 생성 (PIL)
+    if subtitle.strip():
+        make_subtitle_png(subtitle, sub_png)
+        overlay_subtitle(raw_path, sub_png, out_path)
+    else:
+        shutil.copy(str(raw_path), str(out_path))
+
     return True
 
 
@@ -279,15 +340,13 @@ def add_bgm(video_path: Path, out_path: Path, bgm_volume: float = 0.15) -> bool:
     bgm_files = list(BGM_DIR.glob("*.mp3")) + list(BGM_DIR.glob("*.m4a"))
     if not bgm_files:
         print("  ℹ️  bgm/ 폴더에 mp3 없음 → BGM 없이 저장")
-        print(f"     D:\\WISSLIST\\bgm\\ 에 mp3 넣으면 다음 실행부터 자동 적용")
         shutil.copy(str(video_path), str(out_path))
         return True
 
     bgm = random.choice(bgm_files)
     print(f"  🎵 BGM: {bgm.name}")
     dur = get_audio_duration(str(video_path))
-
-    af = (
+    af  = (
         f"[1:a]aloop=loop=-1:size=2000000000,"
         f"atrim=0:{dur:.3f},"
         f"volume={bgm_volume}[bgm];"
@@ -301,7 +360,7 @@ def add_bgm(video_path: Path, out_path: Path, bgm_volume: float = 0.15) -> bool:
            str(out_path)]
     code, _, err = run_cmd(cmd, timeout=120)
     if code != 0:
-        print(f"  ⚠️  BGM 실패 → BGM 없이 저장\n{err[-200:]}")
+        print(f"  ⚠️  BGM 실패 → BGM 없이 저장")
         shutil.copy(str(video_path), str(out_path))
     return True
 
@@ -358,7 +417,7 @@ def assemble(script_path=None):
         clip_out = TMP_DIR / f"clip_{i:02d}.mp4"
         ok = make_segment_clip(media_file, seg["audio_path"],
                                sub, dur, clip_out, i)
-        if ok:
+        if ok and clip_out.exists():
             clip_paths.append(clip_out)
             print(f"    ✅ clip_{i:02d}.mp4")
         else:
