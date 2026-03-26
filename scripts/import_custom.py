@@ -160,14 +160,15 @@ def run(product_name: str = None):
             "clip_verified": False,
         }
         library.append(entry)
-        tag_preview = ", ".join(tags[:4])
-        print(f"  ✅ 신규 등록: {dest.name}  [{tag_preview}...]")
+        print(f"  ✅ 신규 등록: {f.name} → {dest}")
         added += 1
 
     save_library(library)
 
     print(f"\n 완료: 신규 {added}개 등록, {updated}개 태그 업데이트")
     if product_name and (added + updated) > 0:
+        print(f"\n 📁 파일 저장 위치: {dest_dir}")
+        print(f"   (import_here에서 이동됨. 삭제된 게 아닙니다.)")
         print(f"\n 이제 스크립트 JSON에서 제품 등장 장면 visual_tag에")
         print(f"   '제품이미지' 태그를 넣으면 '{product_name}' 이미지가 우선 매칭됩니다.")
     if added > 0 and not product_name:
