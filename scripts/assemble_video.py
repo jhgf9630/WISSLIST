@@ -354,25 +354,24 @@ def split_narration(text: str) -> tuple:
 
 
 # ══════════════════════════════════════════════════════════════════
-# 미디어 매칭 (GIF 우선)
+# 미디어 매칭 (GIF 우선, 후보 목록 반환)
 # ══════════════════════════════════════════════════════════════════
-def find_best_media(visual_tags: list, exclude_files: set = None,
-                    prefer_gif: bool = True, product_name: str = None):
+def find_media_candidates(visual_tags: list, exclude_files: set = None,
+                          prefer_gif: bool = True, product_name: str = None,
+                          max_candidates: int = 5) -> list:
     """
-    태그 기반 미디어 매칭.
+    태그 기반 미디어 후보 목록 반환 (최대 max_candidates개).
+    변환 실패 시 순서대로 다음 후보 사용.
 
-    product_name 지정 시:
-      - visual_tag에 "제품이미지" 포함 → product_name 태그가 있는 파일만 우선 탐색
-      - 없으면 일반 태그 매칭으로 폴백
-    이 방식으로 안성탕면 영상 만들 때 불닭볶음면 이미지가 나오는 문제 방지.
+    반환: [item, item, ...] 점수 내림차순
     """
     if exclude_files is None:
         exclude_files = set()
 
     library = load_library()
+    candidates = []
 
-    # ── 제품 이미지 우선 매칭 ────────────────────────────────────────
-    # visual_tag에 "제품이미지" 포함 + product_name 있을 때만 동작
+    # ── 제품 이미지 우선 탐색 ──────────────────────────────────────
     is_product_seg = "제품이미지" in visual_tags
     if is_product_seg and product_name:
         product_pool = []
@@ -382,22 +381,20 @@ def find_best_media(visual_tags: list, exclude_files: set = None,
             if not Path(item["file"]).exists():
                 continue
             tags = set(item["all_tags"])
-            # 제품명 태그가 정확히 매칭되는 파일만
             if product_name in tags or product_name.replace(" ", "") in tags:
-                score = len(set(visual_tags) & tags) + 10  # 보너스 점수
+                score = len(set(visual_tags) & tags) + 10
                 product_pool.append((score, item))
 
         if product_pool:
-            max_score   = max(s for s, _ in product_pool)
-            top_matches = [item for s, item in product_pool if s == max_score]
-            chosen      = random.choice(top_matches)
-            print(f"  🎯 [제품] {Path(chosen['file']).name}  (제품명 매칭: {product_name})")
-            return chosen
+            product_pool.sort(key=lambda x: -x[0])
+            for _, item in product_pool[:max_candidates]:
+                candidates.append(item)
+            print(f"  🎯 [제품] 후보 {len(candidates)}개  (제품명: {product_name})")
+            return candidates
         else:
-            print(f"  ⚠️  '{product_name}' 제품 이미지 없음 → 일반 태그 매칭으로 폴백")
-            print(f"     import_custom.py --product '{product_name}' 로 등록하세요")
+            print(f"  ⚠️  '{product_name}' 제품 이미지 없음 → 일반 태그 매칭")
 
-    # ── 일반 태그 매칭 ────────────────────────────────────────────────
+    # ── 일반 태그 매칭 ────────────────────────────────────────────
     scored_gif, scored_other = [], []
     for item in library:
         if item["file"] in exclude_files:
@@ -410,18 +407,37 @@ def find_best_media(visual_tags: list, exclude_files: set = None,
         (scored_gif if item["file"].lower().endswith(".gif")
          else scored_other).append((score, item))
 
-    pool = scored_gif if (prefer_gif and scored_gif) else (scored_gif + scored_other)
-    if not pool:
-        pool = scored_other
-    if not pool:
-        return _fallback_pexels(visual_tags[0] if visual_tags else "food")
+    # GIF 우선 풀 구성
+    if prefer_gif and scored_gif:
+        # GIF 상위 + 일반 나머지 순서
+        scored_gif.sort(key=lambda x: -x[0])
+        scored_other.sort(key=lambda x: -x[0])
+        pool = scored_gif + scored_other
+    else:
+        pool = sorted(scored_gif + scored_other, key=lambda x: -x[0])
 
-    max_score   = max(s for s, _ in pool)
-    top_matches = [item for s, item in pool if s == max_score]
-    chosen      = random.choice(top_matches)
-    kind = "GIF" if chosen["file"].lower().endswith(".gif") else "IMG"
-    print(f"  🎯 [{kind}] {Path(chosen['file']).name}  (점수:{max_score})")
-    return chosen
+    for _, item in pool[:max_candidates]:
+        candidates.append(item)
+
+    if not candidates:
+        # 라이브러리에 없으면 Pexels 폴백 1개
+        fb = _fallback_pexels(visual_tags[0] if visual_tags else "food")
+        if fb:
+            candidates.append(fb)
+
+    if candidates:
+        kind = "GIF" if candidates[0]["file"].lower().endswith(".gif") else "IMG"
+        print(f"  🎯 [{kind}] {Path(candidates[0]['file']).name}  "
+              f"(후보 {len(candidates)}개)")
+    return candidates
+
+
+# 하위 호환 래퍼 (기존 코드에서 단일 아이템 반환 기대하는 곳 없지만 안전하게 유지)
+def find_best_media(visual_tags, exclude_files=None,
+                    prefer_gif=True, product_name=None):
+    cands = find_media_candidates(visual_tags, exclude_files,
+                                  prefer_gif, product_name, max_candidates=5)
+    return cands[0] if cands else None
 
 
 def _fallback_pexels(query: str):
@@ -485,42 +501,76 @@ def make_segment_clip(media_path, audio_path: str,
         print(f"    ⚠️  배경 영상 생성 실패:\n{err[-300:]}")
         return False
 
-    # ── 3. 미디어를 BOX 크기로 변환 ──────────────────────────────
+    # ── 3. 미디어를 BOX 크기로 변환 (실패 시 다음 후보 자동 시도) ──
     scale_vf = (f"scale={BOX_W}:{BOX_H}"
                 f":force_original_aspect_ratio=decrease"
                 f",pad={BOX_W}:{BOX_H}:(ow-iw)/2:(oh-ih)/2:black")
 
-    if media_path and Path(media_path).exists():
-        ext = Path(media_path).suffix.lower()
+    def _try_convert_media(mpath: str) -> bool:
+        """단일 미디어 파일을 media_mp4로 변환. 성공 True, 실패 False."""
+        ext = Path(mpath).suffix.lower()
         if ext in (".jpg", ".jpeg", ".png", ".webp"):
-            cmd_m = ["ffmpeg", "-y", "-loop", "1", "-i", media_path,
+            cmd_m = ["ffmpeg", "-y", "-loop", "1", "-i", mpath,
+                     "-vf", scale_vf, "-c:v", "libx264", "-preset", "veryfast",
+                     "-crf", "23", "-r", "30", "-an",
+                     "-t", f"{duration:.3f}", "-pix_fmt", "yuv420p", str(media_mp4)]
+        elif ext == ".gif":
+            # GIF: palette 문제 방지용 -ignore_loop 0 추가
+            cmd_m = ["ffmpeg", "-y",
+                     "-ignore_loop", "0",
+                     "-stream_loop", "-1", "-i", mpath,
                      "-vf", scale_vf, "-c:v", "libx264", "-preset", "veryfast",
                      "-crf", "23", "-r", "30", "-an",
                      "-t", f"{duration:.3f}", "-pix_fmt", "yuv420p", str(media_mp4)]
         else:
-            cmd_m = ["ffmpeg", "-y", "-stream_loop", "-1", "-i", media_path,
+            cmd_m = ["ffmpeg", "-y", "-stream_loop", "-1", "-i", mpath,
                      "-vf", scale_vf, "-c:v", "libx264", "-preset", "veryfast",
                      "-crf", "23", "-r", "30", "-an",
                      "-t", f"{duration:.3f}", "-pix_fmt", "yuv420p", str(media_mp4)]
+        code_m, _, err_m = run_cmd(cmd_m, timeout=60)
+        if code_m != 0:
+            print(f"    ⚠️  변환 실패 ({Path(mpath).name}): {err_m[-120:]}")
+            return False
+        # 변환 결과가 실제로 유효한지 크기 확인
+        if not media_mp4.exists() or media_mp4.stat().st_size < 1000:
+            print(f"    ⚠️  변환 결과 불량 ({Path(mpath).name})")
+            return False
+        return True
 
-        code2, _, err2 = run_cmd(cmd_m, timeout=60)
-        if code2 != 0:
-            print(f"    ⚠️  미디어 변환 실패 → 배경만\n{err2[-200:]}")
-            shutil.copy(str(bg_vid), str(combined))
+    media_ok = False
+    if media_path and Path(media_path).exists():
+        # 1차 시도
+        if _try_convert_media(media_path):
+            media_ok = True
         else:
-            # 배경 위에 미디어 overlay
-            cmd_ov = ["ffmpeg", "-y",
-                      "-i", str(bg_vid), "-i", str(media_mp4),
-                      "-filter_complex", f"overlay={BOX_X}:{BOX_Y}",
-                      "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-                      "-r", "30", "-c:a", "copy",
-                      "-t", f"{duration:.3f}", "-pix_fmt", "yuv420p",
-                      str(combined)]
-            code3, _, err3 = run_cmd(cmd_ov, timeout=60)
-            if code3 != 0:
-                print(f"    ⚠️  overlay 실패 → 배경만\n{err3[-200:]}")
-                shutil.copy(str(bg_vid), str(combined))
+            # 후보 파일들 순서대로 재시도 (make_segment_clip 호출자가 넘겨준 candidates)
+            for alt in getattr(make_segment_clip, "_candidates", []):
+                alt_path = alt["file"]
+                if alt_path == media_path:
+                    continue
+                if not Path(alt_path).exists():
+                    continue
+                print(f"    🔄 대체 미디어 시도: {Path(alt_path).name}")
+                if _try_convert_media(alt_path):
+                    media_ok = True
+                    break
+
+    if media_ok:
+        # 배경 위에 미디어 overlay
+        cmd_ov = ["ffmpeg", "-y",
+                  "-i", str(bg_vid), "-i", str(media_mp4),
+                  "-filter_complex", f"overlay={BOX_X}:{BOX_Y}",
+                  "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+                  "-r", "30", "-c:a", "copy",
+                  "-t", f"{duration:.3f}", "-pix_fmt", "yuv420p",
+                  str(combined)]
+        code3, _, err3 = run_cmd(cmd_ov, timeout=60)
+        if code3 != 0:
+            print(f"    ⚠️  overlay 실패 → 배경만\n{err3[-200:]}")
+            shutil.copy(str(bg_vid), str(combined))
     else:
+        if media_path:
+            print(f"    ⚠️  모든 후보 변환 실패 → 배경만 사용")
         shutil.copy(str(bg_vid), str(combined))
 
     # ── 4. 자막 2분할 PNG 생성 ────────────────────────────────────
@@ -790,13 +840,18 @@ def assemble(script_path=None):
         narr = seg["narration"]
         print(f"\n  Seg {i+1} | {dur:.2f}초 | {tags}")
 
-        media      = find_best_media(tags, exclude_files=used,
-                                     prefer_gif=True,
-                                     product_name=product_name)
-        media_file = None
-        if media and Path(media["file"]).exists():
-            used.add(media["file"])
-            media_file = media["file"]
+        media_file  = None
+        candidates  = find_media_candidates(tags, exclude_files=used,
+                                            prefer_gif=True,
+                                            product_name=product_name,
+                                            max_candidates=5)
+        if candidates:
+            media_file = candidates[0]["file"]
+            used.add(media_file)
+            # 후보 목록을 함수 속성으로 전달 (재시도용)
+            make_segment_clip._candidates = candidates[1:]
+        else:
+            make_segment_clip._candidates = []
 
         clip_out = TMP_DIR / f"clip_{i:02d}.mp4"
         ok = make_segment_clip(media_file, seg["audio_path"],
