@@ -1,18 +1,21 @@
 # =============================================
-# WISSLIST - 영상 자동 조립 v6
+# WISSLIST - 영상 자동 조립 v7 (ffmpeg 직접 구동)
 # 실행: python D:\WISSLIST\scripts\assemble_video.py
 #
-# v6 핵심 변경:
-#  - asyncio 완전 제거 → edge-tts CLI subprocess 호출
-#    (Windows Python 3.12 socketpair 오류 근본 해결)
-#  - GIF 우선 매칭 + 루프 처리
-#  - 오디오 실제 길이 기준 클립 맞춤
-#  - 고화질 출력
+# v7 개선사항:
+#  1. 자막 - ffmpeg drawtext 필터 (한국어 지원)
+#  2. BGM   - D:\WISSLIST\bgm\ 폴더의 mp3 자동 적용
+#  3. 속도  - moviepy 제거, ffmpeg subprocess 직접 사용
+#             → 50초 영상 기준 30분 → 1~2분으로 단축
+#  4. 1.5배속 - ffmpeg setpts + atempo 필터
 # =============================================
 
 import json
 import sys
 import subprocess
+import shutil
+import random
+import os
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -23,71 +26,58 @@ BASE        = Path(BASE_DIR)
 SCRIPT_PATH = BASE / "scripts_json" / "today_script.json"
 AUDIO_DIR   = BASE / "audio"
 OUTPUT_DIR  = BASE / "output"
+TMP_DIR     = BASE / "tmp_clips"
+BGM_DIR     = BASE / "bgm"
 
 TARGET_W, TARGET_H = 1080, 1920
-
-# ── moviepy 버전 호환 ─────────────────────────────────────────────
-try:
-    from moviepy.editor import (
-        VideoFileClip, ImageClip, AudioFileClip, TextClip,
-        CompositeVideoClip, concatenate_videoclips, ColorClip,
-    )
-    MOVIEPY_V = 1
-    print("✅ moviepy v1 로드됨")
-except ModuleNotFoundError:
-    try:
-        from moviepy import (
-            VideoFileClip, ImageClip, AudioFileClip, TextClip,
-            CompositeVideoClip, concatenate_videoclips, ColorClip,
-        )
-        MOVIEPY_V = 2
-        print("✅ moviepy v2 로드됨")
-    except ImportError:
-        print("❌ moviepy 없음. pip install \"moviepy==1.0.3\"")
-        sys.exit(1)
+FONT_PATH = "C:/Windows/Fonts/malgun.ttf"   # 맑은 고딕 (Windows 기본)
 
 
 # ══════════════════════════════════════════════════════════════════
-# TTS — asyncio 완전 제거, subprocess로 edge-tts CLI 직접 호출
+# ffmpeg 존재 확인
+# ══════════════════════════════════════════════════════════════════
+def check_ffmpeg():
+    if shutil.which("ffmpeg") is None:
+        print("❌ ffmpeg가 설치되어 있지 않습니다.")
+        print("   https://ffmpeg.org/download.html 에서 다운로드 후")
+        print("   PATH에 추가하세요.")
+        sys.exit(1)
+    print("✅ ffmpeg 확인 완료")
+
+
+# ══════════════════════════════════════════════════════════════════
+# TTS — edge-tts CLI (asyncio 없음)
 # ══════════════════════════════════════════════════════════════════
 def make_tts(text: str, out_path: Path, voice: str = "ko-KR-SunHiNeural"):
-    """
-    edge-tts CLI를 subprocess로 실행.
-    asyncio / socket 문제와 완전히 무관하게 동작.
-    """
     cmd = [
         "edge-tts",
         "--voice", voice,
-        "--rate", "+5%",        # 약간 빠르게 (자연스러운 쇼츠 속도)
+        "--rate", "+5%",
         "--text", text,
         "--write-media", str(out_path),
     ]
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(result.stderr.strip())
-        size_kb = out_path.stat().st_size // 1024
-        print(f"  🎙️  {out_path.name}  ({size_kb}KB)")
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if r.returncode != 0:
+            raise RuntimeError(r.stderr.strip())
     except FileNotFoundError:
-        # edge-tts 명령이 PATH에 없는 경우 python -m edge_tts 로 재시도
         cmd2 = [sys.executable, "-m", "edge_tts"] + cmd[1:]
-        result = subprocess.run(cmd2, capture_output=True, text=True, timeout=30)
-        if result.returncode != 0:
-            raise RuntimeError(f"edge-tts 실패: {result.stderr.strip()}")
-        size_kb = out_path.stat().st_size // 1024
-        print(f"  🎙️  {out_path.name}  ({size_kb}KB)")
+        r = subprocess.run(cmd2, capture_output=True, text=True, timeout=30)
+        if r.returncode != 0:
+            raise RuntimeError(f"edge-tts 실패: {r.stderr.strip()}")
+    size_kb = out_path.stat().st_size // 1024
+    print(f"  🎙️  {out_path.name}  ({size_kb}KB)")
 
 
 def get_audio_duration(path: str) -> float:
-    clip = AudioFileClip(str(path))
-    dur  = clip.duration
-    clip.close()
-    return dur
+    cmd = [
+        "ffprobe", "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        str(path),
+    ]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    return float(r.stdout.strip())
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -96,13 +86,11 @@ def get_audio_duration(path: str) -> float:
 def find_best_media(visual_tags: list,
                     exclude_files: set = None,
                     prefer_gif: bool = True):
-    import random
     if exclude_files is None:
         exclude_files = set()
 
     library = load_library()
-    scored_gif   = []
-    scored_other = []
+    scored_gif, scored_other = [], []
 
     for item in library:
         if item["file"] in exclude_files:
@@ -112,10 +100,8 @@ def find_best_media(visual_tags: list,
         score = len(set(visual_tags) & set(item["all_tags"]))
         if score == 0:
             continue
-        if item["file"].lower().endswith(".gif"):
-            scored_gif.append((score, item))
-        else:
-            scored_other.append((score, item))
+        (scored_gif if item["file"].lower().endswith(".gif")
+         else scored_other).append((score, item))
 
     pool = scored_gif if (prefer_gif and scored_gif) else (scored_gif + scored_other)
     if not pool:
@@ -135,7 +121,6 @@ def _fallback_pexels(query: str):
     from config import PEXELS_API_KEY
     from library import add_entry
     import requests
-
     headers      = {"Authorization": PEXELS_API_KEY}
     url          = (f"https://api.pexels.com/v1/search"
                     f"?query={requests.utils.quote(query)}&per_page=1")
@@ -145,14 +130,13 @@ def _fallback_pexels(query: str):
         res   = requests.get(url, headers=headers, timeout=10).json()
         photo = res["photos"][0]
         path  = fallback_dir / f"pxl_{photo['id']}.jpg"
-        data  = requests.get(photo["src"]["large"], timeout=15).content
-        path.write_bytes(data)
+        path.write_bytes(requests.get(photo["src"]["large"], timeout=15).content)
         entry = {"file": str(path), "category": "fallback",
                  "source": photo.get("url",""), "query": query,
                  "provider": "pexels", "all_tags": [query],
                  "clip_verified": False}
         add_entry(entry)
-        print(f"  📥 폴백 다운로드: {path.name}")
+        print(f"  📥 폴백: {path.name}")
         return entry
     except Exception as e:
         print(f"  ❌ 폴백 실패: {e}")
@@ -160,111 +144,213 @@ def _fallback_pexels(query: str):
 
 
 # ══════════════════════════════════════════════════════════════════
-# 클립 생성
+# ffmpeg로 단일 세그먼트 클립 생성 (빠름)
 # ══════════════════════════════════════════════════════════════════
-def _v1_duration(clip, d):  return clip.set_duration(d)
-def _v2_duration(clip, d):  return clip.with_duration(d)
-def _set_dur(clip, d):
-    return _v1_duration(clip, d) if MOVIEPY_V == 1 else _v2_duration(clip, d)
-
-def _v1_resize(clip, h):    return clip.resize(height=h)
-def _v2_resize(clip, h):    return clip.resized(height=h)
-def _resize_h(clip, h):
-    return _v1_resize(clip, h) if MOVIEPY_V == 1 else _v2_resize(clip, h)
-
-def _set_pos(clip, pos):
-    return clip.set_position(pos) if MOVIEPY_V == 1 else clip.with_position(pos)
-
-def _pad_to_vertical(clip, duration):
-    """1080×1920 맞춤 패딩"""
-    clip = _set_dur(clip, duration)
-    w    = clip.size[0]
-    if w < TARGET_W:
-        bg    = ColorClip((TARGET_W, TARGET_H), color=(0,0,0), duration=duration)
-        x_off = (TARGET_W - w) // 2
-        clip  = _set_pos(clip, (x_off, 0))
-        clip  = CompositeVideoClip([bg, clip], size=(TARGET_W, TARGET_H))
-        clip  = _set_dur(clip, duration)
-    return clip
+def _escape_drawtext(text: str) -> str:
+    """ffmpeg drawtext 특수문자 이스케이프"""
+    for ch in ["\\", "'", ":", "[", "]"]:
+        text = text.replace(ch, "\\" + ch)
+    return text
 
 
-def make_clip(media_path: str, duration: float):
-    ext = Path(media_path).suffix.lower()
+def make_segment_clip(media_path: str, audio_path: str,
+                      subtitle: str, duration: float,
+                      out_path: Path) -> bool:
+    """
+    ffmpeg 한 번으로 [영상/이미지/GIF] + [오디오] + [자막] → mp4 출력
+    """
+    ext = Path(media_path).suffix.lower() if media_path else ""
 
-    if ext in (".jpg", ".jpeg", ".png", ".webp"):
-        clip = (ImageClip(media_path)
-                if MOVIEPY_V == 1
-                else ImageClip(media_path, duration=duration))
-        clip = _resize_h(clip, TARGET_H)
-        clip = _pad_to_vertical(clip, duration)
+    # ── 자막 drawtext 필터 ────────────────────────────────────────
+    safe_sub = _escape_drawtext(subtitle)
+    font_arg = f"fontfile='{FONT_PATH}'" if Path(FONT_PATH).exists() else "font=Malgun Gothic"
+
+    drawtext = (
+        f"drawtext={font_arg}"
+        f":text='{safe_sub}'"
+        f":fontsize=55"
+        f":fontcolor=white"
+        f":borderw=3"
+        f":bordercolor=black"
+        f":x=(w-text_w)/2"          # 가로 중앙
+        f":y=h*0.73"                 # 화면 73% 위치
+        f":line_spacing=8"
+    )
+
+    # ── 영상 소스 준비 ────────────────────────────────────────────
+    if not media_path or not Path(media_path).exists():
+        # 검정 배경
+        vf = f"color=black:s={TARGET_W}x{TARGET_H}:d={duration}[v_raw];[v_raw]{drawtext}"
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", f"color=black:s={TARGET_W}x{TARGET_H}:d={duration}",
+            "-i", audio_path,
+            "-vf", drawtext,
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+            "-c:a", "aac", "-b:a", "128k",
+            "-t", str(duration),
+            "-pix_fmt", "yuv420p",
+            str(out_path),
+        ]
+
+    elif ext in (".jpg", ".jpeg", ".png", ".webp"):
+        # 정지 이미지 → scale + pad → drawtext
+        vf = (
+            f"scale={TARGET_W}:{TARGET_H}:force_original_aspect_ratio=decrease,"
+            f"pad={TARGET_W}:{TARGET_H}:(ow-iw)/2:(oh-ih)/2:black,"
+            f"{drawtext}"
+        )
+        cmd = [
+            "ffmpeg", "-y",
+            "-loop", "1", "-i", str(media_path),
+            "-i", audio_path,
+            "-vf", vf,
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+            "-c:a", "aac", "-b:a", "128k",
+            "-t", str(duration),
+            "-pix_fmt", "yuv420p",
+            str(out_path),
+        ]
 
     elif ext == ".gif":
-        try:
-            raw   = VideoFileClip(media_path)
-            loops = max(1, int(duration / raw.duration) + 1)
-            if MOVIEPY_V == 1:
-                from moviepy.video.fx.all import loop as fx_loop
-                clip = fx_loop(raw, n=loops).subclip(0, duration)
-            else:
-                from moviepy import vfx
-                clip = raw.with_effects([vfx.Loop(n=loops)]).subclipped(0, duration)
-            clip = _resize_h(clip, TARGET_H)
-            clip = _pad_to_vertical(clip, duration)
-        except Exception as e:
-            print(f"    ⚠️  GIF 로드 실패({e}) → 검정 배경")
-            clip = ColorClip((TARGET_W, TARGET_H), color=(0,0,0), duration=duration)
+        # GIF → loop + scale + drawtext
+        vf = (
+            f"scale={TARGET_W}:{TARGET_H}:force_original_aspect_ratio=decrease,"
+            f"pad={TARGET_W}:{TARGET_H}:(ow-iw)/2:(oh-ih)/2:black,"
+            f"{drawtext}"
+        )
+        cmd = [
+            "ffmpeg", "-y",
+            "-stream_loop", "-1", "-i", str(media_path),   # 무한 루프
+            "-i", audio_path,
+            "-vf", vf,
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+            "-c:a", "aac", "-b:a", "128k",
+            "-t", str(duration),
+            "-pix_fmt", "yuv420p",
+            str(out_path),
+        ]
 
     else:
-        try:
-            raw     = VideoFileClip(media_path)
-            use_dur = min(duration, raw.duration)
-            clip    = (raw.subclip(0, use_dur) if MOVIEPY_V == 1
-                       else raw.subclipped(0, use_dur))
-            clip    = _resize_h(clip, TARGET_H)
-            clip    = _pad_to_vertical(clip, duration)
-        except Exception as e:
-            print(f"    ⚠️  영상 로드 실패({e}) → 검정 배경")
-            clip = ColorClip((TARGET_W, TARGET_H), color=(0,0,0), duration=duration)
+        # 영상 파일
+        vf = (
+            f"scale={TARGET_W}:{TARGET_H}:force_original_aspect_ratio=decrease,"
+            f"pad={TARGET_W}:{TARGET_H}:(ow-iw)/2:(oh-ih)/2:black,"
+            f"{drawtext}"
+        )
+        cmd = [
+            "ffmpeg", "-y",
+            "-stream_loop", "-1", "-i", str(media_path),
+            "-i", audio_path,
+            "-vf", vf,
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+            "-c:a", "aac", "-b:a", "128k",
+            "-t", str(duration),
+            "-pix_fmt", "yuv420p",
+            str(out_path),
+        ]
 
-    return clip
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        print(f"    ⚠️  ffmpeg 오류:\n{r.stderr[-500:]}")
+        return False
+    return True
 
 
 # ══════════════════════════════════════════════════════════════════
-# 자막 오버레이
+# ffmpeg concat + 1.5배속 + BGM
 # ══════════════════════════════════════════════════════════════════
-def add_subtitle(video_clip, text: str, duration: float):
-    if not text.strip():
-        return video_clip
-    try:
-        if MOVIEPY_V == 1:
-            txt = (TextClip(
-                text,
-                fontsize=58, color="white",
-                stroke_color="black", stroke_width=3,
-                method="caption", size=(TARGET_W - 80, None),
-                align="center",
-            )
-            .set_duration(duration)
-            .set_position(("center", 0.72), relative=True))
-        else:
-            txt = (TextClip(
-                text=text,
-                font_size=58, color="white",
-                stroke_color="black", stroke_width=3,
-                method="caption", size=(TARGET_W - 80, None),
-                duration=duration,
-            )
-            .with_position(("center", 0.72), relative=True))
-        return CompositeVideoClip([video_clip, txt])
-    except Exception as e:
-        print(f"    ⚠️  자막 실패({e}), 자막 없이 계속")
-        return video_clip
+def concat_clips(clip_paths: list, out_path: Path) -> bool:
+    """ffmpeg concat demuxer로 클립 합치기 (매우 빠름)"""
+    list_file = TMP_DIR / "concat_list.txt"
+    with open(list_file, "w", encoding="utf-8") as f:
+        for p in clip_paths:
+            f.write(f"file '{str(p).replace(chr(92), '/')}'\n")
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-f", "concat", "-safe", "0",
+        "-i", str(list_file),
+        "-c", "copy",
+        str(out_path),
+    ]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        print(f"  ⚠️  concat 오류:\n{r.stderr[-300:]}")
+        return False
+    return True
+
+
+def apply_speed(in_path: Path, out_path: Path, speed: float = 1.5) -> bool:
+    """영상 전체 재생속도 변경 (영상 + 오디오 동시)"""
+    vf = f"setpts={1/speed:.4f}*PTS"          # 영상 빠르게
+    af = f"atempo={speed}"                      # 오디오 빠르게 (최대 2.0)
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(in_path),
+        "-vf", vf,
+        "-af", af,
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+        "-c:a", "aac", "-b:a", "128k",
+        str(out_path),
+    ]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        print(f"  ⚠️  속도 변경 오류:\n{r.stderr[-300:]}")
+        return False
+    return True
+
+
+def add_bgm(video_path: Path, out_path: Path, bgm_volume: float = 0.15) -> bool:
+    """
+    BGM 폴더에서 mp3 자동 선택 후 믹싱.
+    BGM 없으면 건너뜀.
+    bgm_volume: 0.0~1.0 (기본 0.15 = 나레이션 방해 안 되는 수준)
+    """
+    bgm_files = list(BGM_DIR.glob("*.mp3")) + list(BGM_DIR.glob("*.m4a"))
+    if not bgm_files:
+        print("  ℹ️  BGM 파일 없음 → BGM 없이 저장")
+        print(f"     D:\\WISSLIST\\bgm\\ 폴더에 mp3 넣으면 자동 적용됩니다.")
+        shutil.copy(str(video_path), str(out_path))
+        return True
+
+    bgm = random.choice(bgm_files)
+    print(f"  🎵 BGM: {bgm.name}")
+
+    # 영상 길이 파악
+    dur = get_audio_duration(str(video_path))
+
+    # BGM을 영상 길이에 맞춰 루프 + 볼륨 조절 후 믹싱
+    af = (
+        f"[1:a]aloop=loop=-1:size=2e+09,atrim=0:{dur:.3f},"
+        f"volume={bgm_volume}[bgm];"
+        f"[0:a][bgm]amix=inputs=2:duration=first:dropout_transition=3[aout]"
+    )
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(video_path),
+        "-i", str(bgm),
+        "-filter_complex", af,
+        "-map", "0:v",
+        "-map", "[aout]",
+        "-c:v", "copy",
+        "-c:a", "aac", "-b:a", "128k",
+        str(out_path),
+    ]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        print(f"  ⚠️  BGM 믹싱 실패 → BGM 없이 저장\n{r.stderr[-300:]}")
+        shutil.copy(str(video_path), str(out_path))
+    return True
 
 
 # ══════════════════════════════════════════════════════════════════
 # 메인 조립
 # ══════════════════════════════════════════════════════════════════
 def assemble(script_path=None):
+    check_ffmpeg()
+
     if script_path is None:
         script_path = SCRIPT_PATH
 
@@ -278,78 +364,84 @@ def assemble(script_path=None):
 
     AUDIO_DIR.mkdir(exist_ok=True)
     OUTPUT_DIR.mkdir(exist_ok=True)
+    BGM_DIR.mkdir(exist_ok=True)
+    TMP_DIR.mkdir(exist_ok=True)
 
     print(f"\n🎬 조립 시작: {script['title']}")
     print("=" * 55)
-
     segments = script["segments"]
 
-    # ── 1. TTS 생성 (subprocess, asyncio 없음) ────────────────────
-    print("\n[1/3] 나레이션 생성 중...")
+    # ── 1. TTS 생성 ────────────────────────────────────────────────
+    print("\n[1/5] 나레이션 생성 중...")
     for i, seg in enumerate(segments):
         ap = AUDIO_DIR / f"seg_{i:02d}.mp3"
         make_tts(seg["narration"], ap)
         seg["audio_path"]     = str(ap)
         seg["audio_duration"] = get_audio_duration(str(ap))
-        print(f"       → 실제 길이: {seg['audio_duration']:.2f}초")
+        print(f"       → {seg['audio_duration']:.2f}초")
 
-    # ── 2. 클립 조립 ──────────────────────────────────────────────
-    print("\n[2/3] 클립 조립 중...")
-    used  = set()
-    clips = []
+    # ── 2. 세그먼트별 클립 생성 (ffmpeg) ──────────────────────────
+    print("\n[2/5] 세그먼트 클립 생성 중...")
+    used       = set()
+    clip_paths = []
 
     for i, seg in enumerate(segments):
         dur  = seg["audio_duration"]
         tags = seg["visual_tag"]
-        print(f"\n  Seg {i+1} | {seg['time']} | {dur:.2f}초 | 태그: {tags}")
+        sub  = seg["on_screen_text"]
+        print(f"\n  Seg {i+1} | {dur:.2f}초 | {tags}")
 
         media = find_best_media(tags, exclude_files=used, prefer_gif=True)
-
+        media_file = None
         if media and Path(media["file"]).exists():
             used.add(media["file"])
-            video = make_clip(media["file"], dur)
+            media_file = media["file"]
+
+        clip_out = TMP_DIR / f"clip_{i:02d}.mp4"
+        ok = make_segment_clip(media_file, seg["audio_path"],
+                               sub, dur, clip_out)
+        if ok:
+            clip_paths.append(clip_out)
+            print(f"    ✅ clip_{i:02d}.mp4")
         else:
-            print("    ⚠️  미디어 없음 → 검정 배경")
-            video = ColorClip((TARGET_W, TARGET_H), color=(0,0,0), duration=dur)
+            print(f"    ❌ clip_{i:02d} 생성 실패 → 건너뜀")
 
-        # 오디오
-        try:
-            audio = AudioFileClip(seg["audio_path"])
-            video = (video.set_audio(audio) if MOVIEPY_V == 1
-                     else video.with_audio(audio))
-        except Exception as e:
-            print(f"    ⚠️  오디오 실패: {e}")
+    if not clip_paths:
+        print("❌ 생성된 클립 없음")
+        return None
 
-        # 자막
-        video = add_subtitle(video, seg["on_screen_text"], dur)
-        clips.append(video)
+    # ── 3. 클립 합치기 (concat) ─────────────────────────────────────
+    print("\n[3/5] 클립 합치는 중...")
+    concat_out = TMP_DIR / "concat_raw.mp4"
+    if not concat_clips(clip_paths, concat_out):
+        return None
+    print("  ✅ concat 완료")
 
-    # ── 3. 최종 합치기 + 저장 ─────────────────────────────────────
-    print("\n[3/3] 최종 영상 합치는 중...")
-    final = concatenate_videoclips(clips, method="compose")
+    # ── 4. 1.5배속 적용 ─────────────────────────────────────────────
+    print("\n[4/5] 1.5배속 적용 중...")
+    speed_out = TMP_DIR / "speed_1.5x.mp4"
+    if not apply_speed(concat_out, speed_out, speed=1.5):
+        speed_out = concat_out   # 실패 시 원본 사용
+    else:
+        print("  ✅ 1.5배속 완료")
 
+    # ── 5. BGM 믹싱 → 최종 저장 ─────────────────────────────────────
+    print("\n[5/5] BGM 믹싱 + 최종 저장 중...")
     safe  = "".join(c for c in script["title"][:20]
                     if c.isalnum() or c in " _-").strip()
-    out   = OUTPUT_DIR / f"{safe}.mp4"
+    final = OUTPUT_DIR / f"{safe}.mp4"
+    add_bgm(speed_out, final)
 
-    final.write_videofile(
-        str(out),
-        fps=30,
-        codec="libx264",
-        audio_codec="aac",
-        bitrate="4000k",
-        audio_bitrate="192k",
-        ffmpeg_params=["-crf", "18"],
-        logger=None,
-        threads=4,
-    )
+    # 임시 파일 정리
+    shutil.rmtree(TMP_DIR, ignore_errors=True)
 
-    total_sec = sum(s["audio_duration"] for s in segments)
-    print(f"\n✅ 완성: {out}")
-    print(f"   총 길이: {total_sec:.1f}초")
+    total_raw = sum(s["audio_duration"] for s in segments)
+    total_out = total_raw / 1.5
+    print(f"\n✅ 완성: {final}")
+    print(f"   원본 길이: {total_raw:.1f}초 → 1.5배속 후: {total_out:.1f}초")
     print(f"\n📋 설명란:\n{script.get('description_cta','')}")
     print(f"\n⚠️  {script.get('disclaimer','')}")
-    return str(out)
+    return str(final)
 
 
 if __name__ == "__main__":
