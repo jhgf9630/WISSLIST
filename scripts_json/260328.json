@@ -1,0 +1,108 @@
+{
+  "title": "이거 먹고 라면 취향 바뀜",
+  "hook_type": "공감",
+  "product_name": "까르보불닭볶음면",
+  "segments": [
+    {
+      "time": "00~01s",
+      "narration": "라면 맨날 그맛 아니냐",
+      "on_screen_text": "질림주의",
+      "visual_tag": ["실내생활", "인물감정", "공감가는"],
+      "sfx": "없음"
+    },
+    {
+      "time": "01~02s",
+      "narration": "솔직히 좀 질렸잖아",
+      "on_screen_text": "공감각",
+      "visual_tag": ["인물리액션", "현실적인", "불편함표현"],
+      "sfx": "boing"
+    },
+    {
+      "time": "02~03s",
+      "narration": "매운거 먹고싶은데",
+      "on_screen_text": "매운거",
+      "visual_tag": ["인물일상", "공감가는", "자막배경"],
+      "sfx": "없음"
+    },
+    {
+      "time": "03~04s",
+      "narration": "너무 매운건 또 싫고",
+      "on_screen_text": "애매함",
+      "visual_tag": ["인물감정", "황당한", "불편함표현"],
+      "sfx": "boing"
+    },
+    {
+      "time": "04~05s",
+      "narration": "그 애매한 날 있잖아",
+      "on_screen_text": "그날임",
+      "visual_tag": ["거실풍경", "공감가는", "텍스트배경"],
+      "sfx": "없음"
+    },
+    {
+      "time": "05~06s",
+      "narration": "어 이거 생각나더라",
+      "on_screen_text": "갑자기",
+      "visual_tag": ["주방조리", "라면조리", "조리과정"],
+      "sfx": "whoosh"
+    },
+    {
+      "time": "06~07s",
+      "narration": "까르보불닭볶음면 있잖아",
+      "on_screen_text": "그거",
+      "visual_tag": ["식품패키지", "제품등장", "제품이미지"],
+      "sfx": "ding"
+    },
+    {
+      "time": "07~08s",
+      "narration": "처음엔 별 기대 없었거든",
+      "on_screen_text": "기대X",
+      "visual_tag": ["인물감정", "현실적인", "자막배경"],
+      "sfx": "없음"
+    },
+    {
+      "time": "08~09s",
+      "narration": "근데 한입 먹자마자",
+      "on_screen_text": "첫입",
+      "visual_tag": ["음식클로즈업", "음식풍부한색감", "감정표현"],
+      "sfx": "whoosh"
+    },
+    {
+      "time": "09~10s",
+      "narration": "어 이거 뭐야 싶음",
+      "on_screen_text": "반전",
+      "visual_tag": ["인물리액션", "놀란표정", "유머러스한"],
+      "sfx": "boing"
+    },
+    {
+      "time": "10~11s",
+      "narration": "크림인데 매워 이게",
+      "on_screen_text": "크림매운맛",
+      "visual_tag": ["음식완성샷", "음식풍부한색감", "사용후기"],
+      "sfx": "없음"
+    },
+    {
+      "time": "11~12s",
+      "narration": "느끼할줄 알았는데 아님",
+      "on_screen_text": "반전맛",
+      "visual_tag": ["인물감정", "공감가는", "비포애프터"],
+      "sfx": "whoosh"
+    },
+    {
+      "time": "12~13s",
+      "narration": "은근 계속 손 가는 맛",
+      "on_screen_text": "중독",
+      "visual_tag": ["혼자식사", "만족스러운", "사용후기"],
+      "sfx": "없음"
+    },
+    {
+      "time": "13~14s",
+      "narration": "결국 국물까지 긁음",
+      "on_screen_text": "완식",
+      "visual_tag": ["음식클로즈업", "만족표정", "해결완료"],
+      "sfx": "ding"
+    }
+  ],
+  "closing_line": "이건 인정",
+  "description_cta": "영상 속 제품은 설명란에 정리해놨어",
+  "disclaimer": "이 영상은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다."
+}

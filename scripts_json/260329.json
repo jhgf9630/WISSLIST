@@ -1,0 +1,108 @@
+{
+  "title": "이 치즈 하나로 맛 바뀜",
+  "hook_type": "공감",
+  "product_name": "에멘탈치즈",
+  "segments": [
+    {
+      "time": "00~01s",
+      "narration": "라면 그냥 먹기 질릴 때",
+      "on_screen_text": "질림",
+      "visual_tag": ["실내생활", "인물감정", "공감가는"],
+      "sfx": "없음"
+    },
+    {
+      "time": "01~02s",
+      "narration": "뭔가 넣고 싶잖아",
+      "on_screen_text": "추가각",
+      "visual_tag": ["인물리액션", "현실적인", "불편함표현"],
+      "sfx": "boing"
+    },
+    {
+      "time": "02~03s",
+      "narration": "근데 체다 넣으면",
+      "on_screen_text": "체다",
+      "visual_tag": ["주방조리", "비교대조", "조리과정"],
+      "sfx": "없음"
+    },
+    {
+      "time": "03~04s",
+      "narration": "너무 느끼해지거든",
+      "on_screen_text": "느끼함",
+      "visual_tag": ["인물감정", "황당한", "불편함표현"],
+      "sfx": "boing"
+    },
+    {
+      "time": "04~05s",
+      "narration": "그래서 이거 써봤는데",
+      "on_screen_text": "대체템",
+      "visual_tag": ["거실풍경", "텍스트배경", "공감가는"],
+      "sfx": "whoosh"
+    },
+    {
+      "time": "05~06s",
+      "narration": "에멘탈치즈 있잖아",
+      "on_screen_text": "이거",
+      "visual_tag": ["식품패키지", "제품등장", "제품이미지"],
+      "sfx": "ding"
+    },
+    {
+      "time": "06~07s",
+      "narration": "이게 생각보다 안 느끼함",
+      "on_screen_text": "반전",
+      "visual_tag": ["인물리액션", "놀란표정", "유머러스한"],
+      "sfx": "boing"
+    },
+    {
+      "time": "07~08s",
+      "narration": "향은 고소한데 가벼워",
+      "on_screen_text": "고소",
+      "visual_tag": ["음식클로즈업", "음식풍부한색감", "감정표현"],
+      "sfx": "없음"
+    },
+    {
+      "time": "08~09s",
+      "narration": "라면에 넣으면 진짜 미쳤어",
+      "on_screen_text": "꿀조합",
+      "visual_tag": ["라면조리", "조리과정", "음식준비중"],
+      "sfx": "whoosh"
+    },
+    {
+      "time": "09~10s",
+      "narration": "국물 맛이 확 바뀜",
+      "on_screen_text": "맛변화",
+      "visual_tag": ["음식완성샷", "음식풍부한색감", "사용후기"],
+      "sfx": "ding"
+    },
+    {
+      "time": "10~11s",
+      "narration": "크림 느낌 나는데 안 무거움",
+      "on_screen_text": "가벼움",
+      "visual_tag": ["혼자식사", "만족스러운", "사용후기"],
+      "sfx": "없음"
+    },
+    {
+      "time": "11~12s",
+      "narration": "이거 넣고 라면 계속 먹는 중",
+      "on_screen_text": "중독",
+      "visual_tag": ["인물일상", "공감가는", "사용후기"],
+      "sfx": "whoosh"
+    },
+    {
+      "time": "12~13s",
+      "narration": "결국 국물까지 다 먹음",
+      "on_screen_text": "완식",
+      "visual_tag": ["음식클로즈업", "만족표정", "해결완료"],
+      "sfx": "ding"
+    },
+    {
+      "time": "13~14s",
+      "narration": "이거 하나로 게임 끝",
+      "on_screen_text": "끝판왕",
+      "visual_tag": ["거실풍경", "만족스러운", "클로징"],
+      "sfx": "없음"
+    }
+  ],
+  "closing_line": "이건 필수",
+  "description_cta": "영상에 나온 조합은 설명란에 정리해놨어",
+  "disclaimer": "이 영상은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다."
+}

@@ -1,0 +1,108 @@
+{
+  "title": "이건 왜 질리지가 않냐",
+  "hook_type": "공감",
+  "product_name": "육개장사발면",
+  "segments": [
+    {
+      "time": "00~01s",
+      "narration": "야 라면은 질려야 되잖아",
+      "on_screen_text": "이상함",
+      "visual_tag": ["실내생활", "인물감정", "공감가는"],
+      "sfx": "없음"
+    },
+    {
+      "time": "01~02s",
+      "narration": "근데 얘는 왜 안 질림",
+      "on_screen_text": "왜지",
+      "visual_tag": ["인물리액션", "황당한", "불편함표현"],
+      "sfx": "boing"
+    },
+    {
+      "time": "02~03s",
+      "narration": "편의점 가면 무조건 집음",
+      "on_screen_text": "자동선택",
+      "visual_tag": ["편의점음식", "혼자쇼핑", "공감가는"],
+      "sfx": "whoosh"
+    },
+    {
+      "time": "03~04s",
+      "narration": "딴 거 보다가도 결국 이거",
+      "on_screen_text": "결국이거",
+      "visual_tag": ["마트쇼핑", "비교대조", "현실적인"],
+      "sfx": "없음"
+    },
+    {
+      "time": "04~05s",
+      "narration": "이유 생각해봤거든",
+      "on_screen_text": "분석",
+      "visual_tag": ["거실풍경", "텍스트배경", "공감가는"],
+      "sfx": "없음"
+    },
+    {
+      "time": "05~06s",
+      "narration": "국물 맛이 그냥 미쳤어",
+      "on_screen_text": "국물맛",
+      "visual_tag": ["음식클로즈업", "음식풍부한색감", "감정표현"],
+      "sfx": "ding"
+    },
+    {
+      "time": "06~07s",
+      "narration": "육개장사발면 알지 그거",
+      "on_screen_text": "그거임",
+      "visual_tag": ["식품패키지", "제품등장", "제품이미지"],
+      "sfx": "whoosh"
+    },
+    {
+      "time": "07~08s",
+      "narration": "딱 첫입 먹으면",
+      "on_screen_text": "첫입",
+      "visual_tag": ["라면조리", "조리과정", "음식준비중"],
+      "sfx": "없음"
+    },
+    {
+      "time": "08~09s",
+      "narration": "어? 이건 그냥 해장각",
+      "on_screen_text": "해장각",
+      "visual_tag": ["인물리액션", "놀란표정", "유머러스한"],
+      "sfx": "boing"
+    },
+    {
+      "time": "09~10s",
+      "narration": "기름기 적고 깔끔해",
+      "on_screen_text": "깔끔함",
+      "visual_tag": ["음식완성샷", "깔끔한", "사용후기"],
+      "sfx": "없음"
+    },
+    {
+      "time": "10~11s",
+      "narration": "그래서 계속 먹어도 안 질림",
+      "on_screen_text": "안질림",
+      "visual_tag": ["혼자식사", "공감가는", "사용후기"],
+      "sfx": "whoosh"
+    },
+    {
+      "time": "11~12s",
+      "narration": "컵라면인데 밥 말고 싶어짐",
+      "on_screen_text": "밥각",
+      "visual_tag": ["음식클로즈업", "유머러스한", "감정표현"],
+      "sfx": "boing"
+    },
+    {
+      "time": "12~13s",
+      "narration": "결국 국물까지 다 마심",
+      "on_screen_text": "완국",
+      "visual_tag": ["음식클로즈업", "만족표정", "해결완료"],
+      "sfx": "ding"
+    },
+    {
+      "time": "13~14s",
+      "narration": "또 사러 간다 이거",
+      "on_screen_text": "무한반복",
+      "visual_tag": ["편의점음식", "혼자쇼핑", "현실적인"],
+      "sfx": "whoosh"
+    }
+  ],
+  "closing_line": "이건 못 끊음",
+  "description_cta": "영상에 나온 건 설명란에 정리해놨어",
+  "disclaimer": "이 영상은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다."
+}
