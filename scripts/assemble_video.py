@@ -1,13 +1,12 @@
 # =============================================
-# WISSLIST - 영상 자동 조립 v10
+# WISSLIST - 영상 자동 조립 v11
 # 실행: python D:\WISSLIST\scripts\assemble_video.py
 #
-# v10 수정:
-#  - ffmpeg drawtext fontfile Windows 경로 이스케이프 수정
-#    C:/Windows/Fonts/malgun.ttf
-#    → fontfile=C\\:/Windows/Fonts/malgun.ttf  (콜론 이스케이프)
-#  - 폰트 없을 때 drawtext 자체를 font 옵션 없이 실행
-#  - filterchain 전체 따옴표 구조 재정리
+# v11 핵심 수정:
+#  - drawtext text= 이스케이프 문제 완전 해결
+#    → 자막 텍스트를 임시 파일로 저장 후
+#      textfile= 파라미터로 전달 (이스케이프 불필요)
+#  - fontfile 경로 문제도 동시 해결
 # =============================================
 
 import json
@@ -15,6 +14,7 @@ import sys
 import subprocess
 import shutil
 import random
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -29,13 +29,11 @@ TMP_DIR     = BASE / "tmp_clips"
 BGM_DIR     = BASE / "bgm"
 
 TARGET_W, TARGET_H = 1080, 1920
-
-# Windows 기본 한글 폰트
-FONT_PATH_WIN = r"C:\Windows\Fonts\malgun.ttf"
+FONT_PATH = r"C:\Windows\Fonts\malgun.ttf"   # 맑은 고딕
 
 
 # ══════════════════════════════════════════════════════════════════
-# subprocess 헬퍼 (인코딩 안전)
+# subprocess 헬퍼
 # ══════════════════════════════════════════════════════════════════
 def run_cmd(cmd: list, timeout: int = 120) -> tuple:
     try:
@@ -51,7 +49,7 @@ def run_cmd(cmd: list, timeout: int = 120) -> tuple:
     except FileNotFoundError:
         return 2, "", f"명령어를 찾을 수 없음: {cmd[0]}"
     except subprocess.TimeoutExpired:
-        return 1, "", f"타임아웃 ({timeout}초 초과)"
+        return 1, "", f"타임아웃 ({timeout}초)"
     except Exception as e:
         return 1, "", str(e)
 
@@ -60,10 +58,9 @@ def run_cmd(cmd: list, timeout: int = 120) -> tuple:
 # ffmpeg 확인
 # ══════════════════════════════════════════════════════════════════
 def check_ffmpeg():
-    code, _, err = run_cmd(["ffmpeg", "-version"], timeout=10)
+    code, _, _ = run_cmd(["ffmpeg", "-version"], timeout=10)
     if code != 0:
-        print("❌ ffmpeg를 찾을 수 없습니다.")
-        print("   D:\\ffmpeg\\bin\\ffmpeg.exe 설치 후 PATH 환경변수 등록 필요")
+        print("❌ ffmpeg를 찾을 수 없습니다. PATH 환경변수 등록 필요")
         sys.exit(1)
     print("✅ ffmpeg 확인 완료")
 
@@ -72,32 +69,24 @@ def check_ffmpeg():
 # TTS
 # ══════════════════════════════════════════════════════════════════
 def make_tts(text: str, out_path: Path, voice: str = "ko-KR-SunHiNeural"):
-    base_args = [
-        "--voice", voice,
-        "--rate", "+5%",
-        "--text", text,
-        "--write-media", str(out_path),
-    ]
+    base_args = ["--voice", voice, "--rate", "+5%",
+                 "--text", text, "--write-media", str(out_path)]
     code, _, err = run_cmd(["edge-tts"] + base_args, timeout=30)
     if code != 0:
-        print(f"  ⚠️  edge-tts CLI 실패 → python -m edge_tts 재시도")
         code2, _, err2 = run_cmd(
             [sys.executable, "-m", "edge_tts"] + base_args, timeout=30)
         if code2 != 0:
-            raise RuntimeError(
-                f"TTS 생성 실패. pip install edge-tts\n오류: {err2[:200]}")
-    size_kb = out_path.stat().st_size // 1024
-    print(f"  🎙️  {out_path.name}  ({size_kb}KB)")
+            raise RuntimeError(f"TTS 실패. pip install edge-tts\n{err2[:200]}")
+    print(f"  🎙️  {out_path.name}  ({out_path.stat().st_size//1024}KB)")
 
 
 def get_audio_duration(path: str) -> float:
-    cmd = [
+    _, out, _ = run_cmd([
         "ffprobe", "-v", "error",
         "-show_entries", "format=duration",
         "-of", "default=noprint_wrappers=1:nokey=1",
         str(path),
-    ]
-    _, out, _ = run_cmd(cmd, timeout=15)
+    ], timeout=15)
     try:
         return float(out.strip())
     except ValueError:
@@ -107,15 +96,12 @@ def get_audio_duration(path: str) -> float:
 # ══════════════════════════════════════════════════════════════════
 # 미디어 매칭 (GIF 우선)
 # ══════════════════════════════════════════════════════════════════
-def find_best_media(visual_tags: list,
-                    exclude_files: set = None,
+def find_best_media(visual_tags: list, exclude_files: set = None,
                     prefer_gif: bool = True):
     if exclude_files is None:
         exclude_files = set()
-
     library = load_library()
     scored_gif, scored_other = [], []
-
     for item in library:
         if item["file"] in exclude_files:
             continue
@@ -124,9 +110,8 @@ def find_best_media(visual_tags: list,
         score = len(set(visual_tags) & set(item["all_tags"]))
         if score == 0:
             continue
-        bucket = (scored_gif if item["file"].lower().endswith(".gif")
-                  else scored_other)
-        bucket.append((score, item))
+        (scored_gif if item["file"].lower().endswith(".gif")
+         else scored_other).append((score, item))
 
     pool = scored_gif if (prefer_gif and scored_gif) else (scored_gif + scored_other)
     if not pool:
@@ -146,20 +131,18 @@ def _fallback_pexels(query: str):
     from config import PEXELS_API_KEY
     from library import add_entry
     import requests
-    headers      = {"Authorization": PEXELS_API_KEY}
-    url          = (f"https://api.pexels.com/v1/search"
-                    f"?query={requests.utils.quote(query)}&per_page=1")
     fallback_dir = BASE / "media_library" / "fallback"
     fallback_dir.mkdir(parents=True, exist_ok=True)
     try:
-        res   = requests.get(url, headers=headers, timeout=10).json()
+        res   = requests.get(
+            f"https://api.pexels.com/v1/search?query={requests.utils.quote(query)}&per_page=1",
+            headers={"Authorization": PEXELS_API_KEY}, timeout=10).json()
         photo = res["photos"][0]
         path  = fallback_dir / f"pxl_{photo['id']}.jpg"
         path.write_bytes(requests.get(photo["src"]["large"], timeout=15).content)
         entry = {"file": str(path), "category": "fallback",
                  "source": photo.get("url",""), "query": query,
-                 "provider": "pexels", "all_tags": [query],
-                 "clip_verified": False}
+                 "provider": "pexels", "all_tags": [query], "clip_verified": False}
         add_entry(entry)
         print(f"  📥 폴백: {path.name}")
         return entry
@@ -170,50 +153,35 @@ def _fallback_pexels(query: str):
 
 # ══════════════════════════════════════════════════════════════════
 # drawtext 필터 생성
+# 핵심: 텍스트를 파일로 저장 → textfile= 로 전달
+#       → text= 이스케이프 문제 완전 해결
 # ══════════════════════════════════════════════════════════════════
-def make_drawtext(subtitle: str) -> str:
+def make_drawtext_filter(subtitle: str, textfile_path: Path) -> str:
     """
-    ffmpeg drawtext 필터 문자열 생성.
-
-    Windows 경로 이스케이프 규칙:
-      ffmpeg 필터 내에서 콜론(:)은 옵션 구분자이므로
-      드라이브 문자 C: → C\\: 로 이스케이프해야 함.
-      또한 경로에 역슬래시 없이 슬래시(/) 사용.
-
-    텍스트 이스케이프:
-      작은따옴표(') → \\' 로 이스케이프
-      콜론(:) → \\: 로 이스케이프
-      역슬래시(\\) → \\\\ 로 이스케이프
+    자막 텍스트를 UTF-8 파일로 저장 후 textfile= 파라미터 사용.
+    text= 에서 발생하는 한국어/특수문자 이스케이프 문제 원천 차단.
     """
-    # ── 텍스트 이스케이프 ──────────────────────────────────────────
-    text = subtitle
-    text = text.replace("\\", "\\\\")   # \ → \\
-    text = text.replace("'",  "\\'")     # ' → \'
-    text = text.replace(":",  "\\:")     # : → \:
+    # 텍스트 파일 저장 (UTF-8)
+    textfile_path.write_text(subtitle, encoding="utf-8")
 
-    # ── 폰트 설정 ─────────────────────────────────────────────────
-    font_path = Path(FONT_PATH_WIN)
-    if font_path.exists():
-        # Windows 경로: C:\Windows\Fonts\malgun.ttf
-        # → ffmpeg 필터용: C\\:/Windows/Fonts/malgun.ttf
-        fp = str(font_path).replace("\\", "/")          # 역슬래시 → 슬래시
-        fp = fp.replace(":", "\\:")                      # C: → C\:
-        font_opt = f"fontfile={fp}"
-    else:
-        # 폰트 파일 없으면 font 이름으로 시도 (영문 폰트)
-        font_opt = "font=Arial"
+    # textfile 경로: Windows 역슬래시 → 슬래시, 콜론 이스케이프
+    tf = str(textfile_path).replace("\\", "/").replace(":", "\\:")
 
-    drawtext = (
+    # 폰트 경로 이스케이프
+    fp = FONT_PATH.replace("\\", "/").replace(":", "\\:")
+    font_opt = f"fontfile={fp}" if Path(FONT_PATH).exists() else "font=Arial"
+
+    return (
         f"drawtext={font_opt}"
-        f":text='{text}'"
+        f":textfile={tf}"
         f":fontsize=55"
         f":fontcolor=white"
         f":borderw=3"
         f":bordercolor=black"
         f":x=(w-text_w)/2"
         f":y=h*0.73"
+        f":reload=1"
     )
-    return drawtext
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -221,10 +189,13 @@ def make_drawtext(subtitle: str) -> str:
 # ══════════════════════════════════════════════════════════════════
 def make_segment_clip(media_path, audio_path: str,
                       subtitle: str, duration: float,
-                      out_path: Path) -> bool:
+                      out_path: Path, idx: int) -> bool:
+
+    # 자막 텍스트파일 경로
+    textfile = TMP_DIR / f"sub_{idx:02d}.txt"
+    drawtext = make_drawtext_filter(subtitle, textfile)
 
     ext = Path(media_path).suffix.lower() if media_path else ""
-    drawtext = make_drawtext(subtitle)
 
     scale_pad = (
         f"scale={TARGET_W}:{TARGET_H}"
@@ -243,7 +214,6 @@ def make_segment_clip(media_path, audio_path: str,
     ]
 
     if not media_path or not Path(media_path).exists():
-        # 검정 배경
         vf  = drawtext
         cmd = (["ffmpeg", "-y",
                 "-f", "lavfi",
@@ -260,8 +230,7 @@ def make_segment_clip(media_path, audio_path: str,
                 "-vf", vf]
                + common_out)
 
-    else:
-        # GIF / 영상 (stream_loop 무한 반복)
+    else:   # gif / mp4 등
         vf  = f"{scale_pad},{drawtext}"
         cmd = (["ffmpeg", "-y",
                 "-stream_loop", "-1", "-i", media_path,
@@ -283,15 +252,9 @@ def concat_clips(clip_paths: list, out_path: Path) -> bool:
     list_file = TMP_DIR / "concat_list.txt"
     with open(list_file, "w", encoding="utf-8") as f:
         for p in clip_paths:
-            # Windows 경로 → 슬래시로 통일 (ffmpeg concat 호환)
-            fp = str(p).replace("\\", "/")
-            f.write(f"file '{fp}'\n")
-
-    cmd = ["ffmpeg", "-y",
-           "-f", "concat", "-safe", "0",
-           "-i", str(list_file),
-           "-c", "copy",
-           str(out_path)]
+            f.write(f"file '{str(p).replace(chr(92), '/')}'\n")
+    cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0",
+           "-i", str(list_file), "-c", "copy", str(out_path)]
     code, _, err = run_cmd(cmd, timeout=120)
     if code != 0:
         print(f"  ⚠️  concat 실패:\n{err[-300:]}")
@@ -300,14 +263,11 @@ def concat_clips(clip_paths: list, out_path: Path) -> bool:
 
 
 def apply_speed(in_path: Path, out_path: Path, speed: float = 1.5) -> bool:
-    vf = f"setpts={1/speed:.4f}*PTS"
-    af = f"atempo={speed}"
-    cmd = ["ffmpeg", "-y",
-           "-i", str(in_path),
-           "-vf", vf, "-af", af,
+    cmd = ["ffmpeg", "-y", "-i", str(in_path),
+           "-vf", f"setpts={1/speed:.4f}*PTS",
+           "-af", f"atempo={speed}",
            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-           "-c:a", "aac", "-b:a", "128k",
-           str(out_path)]
+           "-c:a", "aac", "-b:a", "128k", str(out_path)]
     code, _, err = run_cmd(cmd, timeout=120)
     if code != 0:
         print(f"  ⚠️  배속 실패:\n{err[-300:]}")
@@ -334,16 +294,14 @@ def add_bgm(video_path: Path, out_path: Path, bgm_volume: float = 0.15) -> bool:
         f"[0:a][bgm]amix=inputs=2:duration=first:dropout_transition=3[aout]"
     )
     cmd = ["ffmpeg", "-y",
-           "-i", str(video_path),
-           "-i", str(bgm),
+           "-i", str(video_path), "-i", str(bgm),
            "-filter_complex", af,
            "-map", "0:v", "-map", "[aout]",
-           "-c:v", "copy",
-           "-c:a", "aac", "-b:a", "128k",
+           "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
            str(out_path)]
     code, _, err = run_cmd(cmd, timeout=120)
     if code != 0:
-        print(f"  ⚠️  BGM 믹싱 실패 → BGM 없이 저장\n{err[-200:]}")
+        print(f"  ⚠️  BGM 실패 → BGM 없이 저장\n{err[-200:]}")
         shutil.copy(str(video_path), str(out_path))
     return True
 
@@ -398,7 +356,8 @@ def assemble(script_path=None):
             media_file = media["file"]
 
         clip_out = TMP_DIR / f"clip_{i:02d}.mp4"
-        ok = make_segment_clip(media_file, seg["audio_path"], sub, dur, clip_out)
+        ok = make_segment_clip(media_file, seg["audio_path"],
+                               sub, dur, clip_out, i)
         if ok:
             clip_paths.append(clip_out)
             print(f"    ✅ clip_{i:02d}.mp4")
