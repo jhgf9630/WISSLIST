@@ -1,11 +1,13 @@
 # =============================================
-# WISSLIST - 영상 자동 조립 v9
+# WISSLIST - 영상 자동 조립 v10
 # 실행: python D:\WISSLIST\scripts\assemble_video.py
 #
-# v9 수정:
-#  - run_cmd에서 FileNotFoundError 캐치 → 자동 폴백
-#  - edge-tts 명령어 없을 때 python -m edge_tts 로 자동 재시도
-#  - subprocess 안정성 전반 개선
+# v10 수정:
+#  - ffmpeg drawtext fontfile Windows 경로 이스케이프 수정
+#    C:/Windows/Fonts/malgun.ttf
+#    → fontfile=C\\:/Windows/Fonts/malgun.ttf  (콜론 이스케이프)
+#  - 폰트 없을 때 drawtext 자체를 font 옵션 없이 실행
+#  - filterchain 전체 따옴표 구조 재정리
 # =============================================
 
 import json
@@ -27,20 +29,15 @@ TMP_DIR     = BASE / "tmp_clips"
 BGM_DIR     = BASE / "bgm"
 
 TARGET_W, TARGET_H = 1080, 1920
-FONT_PATH = "C:/Windows/Fonts/malgun.ttf"
+
+# Windows 기본 한글 폰트
+FONT_PATH_WIN = r"C:\Windows\Fonts\malgun.ttf"
 
 
 # ══════════════════════════════════════════════════════════════════
-# subprocess 공통 헬퍼
-# FileNotFoundError / TimeoutExpired 모두 안전하게 처리
+# subprocess 헬퍼 (인코딩 안전)
 # ══════════════════════════════════════════════════════════════════
 def run_cmd(cmd: list, timeout: int = 120) -> tuple:
-    """
-    반환: (returncode, stdout_str, stderr_str)
-    - 명령어 자체가 없으면(FileNotFoundError) → (2, "", "not found")
-    - 타임아웃 → (1, "", "timeout")
-    - 인코딩 오류는 errors='replace' 로 안전 처리
-    """
     try:
         r = subprocess.run(
             cmd,
@@ -51,63 +48,44 @@ def run_cmd(cmd: list, timeout: int = 120) -> tuple:
         stdout = r.stdout.decode("utf-8", errors="replace") if r.stdout else ""
         stderr = r.stderr.decode("utf-8", errors="replace") if r.stderr else ""
         return r.returncode, stdout, stderr
-
     except FileNotFoundError:
         return 2, "", f"명령어를 찾을 수 없음: {cmd[0]}"
-
     except subprocess.TimeoutExpired:
         return 1, "", f"타임아웃 ({timeout}초 초과)"
-
     except Exception as e:
         return 1, "", str(e)
 
 
 # ══════════════════════════════════════════════════════════════════
-# ffmpeg / ffprobe 확인
+# ffmpeg 확인
 # ══════════════════════════════════════════════════════════════════
 def check_ffmpeg():
     code, _, err = run_cmd(["ffmpeg", "-version"], timeout=10)
     if code != 0:
         print("❌ ffmpeg를 찾을 수 없습니다.")
-        print(f"   오류: {err}")
         print("   D:\\ffmpeg\\bin\\ffmpeg.exe 설치 후 PATH 환경변수 등록 필요")
         sys.exit(1)
     print("✅ ffmpeg 확인 완료")
 
 
 # ══════════════════════════════════════════════════════════════════
-# TTS — edge-tts CLI → 없으면 python -m edge_tts 자동 폴백
+# TTS
 # ══════════════════════════════════════════════════════════════════
 def make_tts(text: str, out_path: Path, voice: str = "ko-KR-SunHiNeural"):
-    """
-    1차: edge-tts CLI 시도
-    2차: python -m edge_tts 로 자동 재시도 (PATH 미등록 시)
-    """
     base_args = [
         "--voice", voice,
         "--rate", "+5%",
         "--text", text,
         "--write-media", str(out_path),
     ]
-
-    # 1차 시도 — edge-tts 명령어
     code, _, err = run_cmd(["edge-tts"] + base_args, timeout=30)
-
-    # 실패 시(명령어 없음 포함) 2차 시도 — python -m edge_tts
     if code != 0:
-        print(f"  ⚠️  edge-tts CLI 실패 ({err[:60]}) → python -m edge_tts 재시도")
+        print(f"  ⚠️  edge-tts CLI 실패 → python -m edge_tts 재시도")
         code2, _, err2 = run_cmd(
-            [sys.executable, "-m", "edge_tts"] + base_args,
-            timeout=30,
-        )
+            [sys.executable, "-m", "edge_tts"] + base_args, timeout=30)
         if code2 != 0:
             raise RuntimeError(
-                f"TTS 생성 실패.\n"
-                f"  1차 오류: {err[:100]}\n"
-                f"  2차 오류: {err2[:100]}\n"
-                f"  해결: pip install edge-tts"
-            )
-
+                f"TTS 생성 실패. pip install edge-tts\n오류: {err2[:200]}")
     size_kb = out_path.stat().st_size // 1024
     print(f"  🎙️  {out_path.name}  ({size_kb}KB)")
 
@@ -168,7 +146,6 @@ def _fallback_pexels(query: str):
     from config import PEXELS_API_KEY
     from library import add_entry
     import requests
-
     headers      = {"Authorization": PEXELS_API_KEY}
     url          = (f"https://api.pexels.com/v1/search"
                     f"?query={requests.utils.quote(query)}&per_page=1")
@@ -192,12 +169,51 @@ def _fallback_pexels(query: str):
 
 
 # ══════════════════════════════════════════════════════════════════
-# 자막 이스케이프
+# drawtext 필터 생성
 # ══════════════════════════════════════════════════════════════════
-def _escape_drawtext(text: str) -> str:
-    for ch in ["\\", "'", ":", "[", "]"]:
-        text = text.replace(ch, "\\" + ch)
-    return text
+def make_drawtext(subtitle: str) -> str:
+    """
+    ffmpeg drawtext 필터 문자열 생성.
+
+    Windows 경로 이스케이프 규칙:
+      ffmpeg 필터 내에서 콜론(:)은 옵션 구분자이므로
+      드라이브 문자 C: → C\\: 로 이스케이프해야 함.
+      또한 경로에 역슬래시 없이 슬래시(/) 사용.
+
+    텍스트 이스케이프:
+      작은따옴표(') → \\' 로 이스케이프
+      콜론(:) → \\: 로 이스케이프
+      역슬래시(\\) → \\\\ 로 이스케이프
+    """
+    # ── 텍스트 이스케이프 ──────────────────────────────────────────
+    text = subtitle
+    text = text.replace("\\", "\\\\")   # \ → \\
+    text = text.replace("'",  "\\'")     # ' → \'
+    text = text.replace(":",  "\\:")     # : → \:
+
+    # ── 폰트 설정 ─────────────────────────────────────────────────
+    font_path = Path(FONT_PATH_WIN)
+    if font_path.exists():
+        # Windows 경로: C:\Windows\Fonts\malgun.ttf
+        # → ffmpeg 필터용: C\\:/Windows/Fonts/malgun.ttf
+        fp = str(font_path).replace("\\", "/")          # 역슬래시 → 슬래시
+        fp = fp.replace(":", "\\:")                      # C: → C\:
+        font_opt = f"fontfile={fp}"
+    else:
+        # 폰트 파일 없으면 font 이름으로 시도 (영문 폰트)
+        font_opt = "font=Arial"
+
+    drawtext = (
+        f"drawtext={font_opt}"
+        f":text='{text}'"
+        f":fontsize=55"
+        f":fontcolor=white"
+        f":borderw=3"
+        f":bordercolor=black"
+        f":x=(w-text_w)/2"
+        f":y=h*0.73"
+    )
+    return drawtext
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -206,28 +222,16 @@ def _escape_drawtext(text: str) -> str:
 def make_segment_clip(media_path, audio_path: str,
                       subtitle: str, duration: float,
                       out_path: Path) -> bool:
+
     ext = Path(media_path).suffix.lower() if media_path else ""
-
-    safe_sub = _escape_drawtext(subtitle)
-    font_arg = (f"fontfile='{FONT_PATH.replace(chr(92), '/')}'"
-                if Path(FONT_PATH).exists()
-                else "font=Malgun Gothic")
-
-    drawtext = (
-        f"drawtext={font_arg}"
-        f":text='{safe_sub}'"
-        f":fontsize=55"
-        f":fontcolor=white"
-        f":borderw=3"
-        f":bordercolor=black"
-        f":x=(w-text_w)/2"
-        f":y=h*0.73"
-        f":line_spacing=8"
-    )
+    drawtext = make_drawtext(subtitle)
 
     scale_pad = (
-        f"scale={TARGET_W}:{TARGET_H}:force_original_aspect_ratio=decrease,"
-        f"pad={TARGET_W}:{TARGET_H}:(ow-iw)/2:(oh-ih)/2:black"
+        f"scale={TARGET_W}:{TARGET_H}"
+        f":force_original_aspect_ratio=decrease"
+        f",pad={TARGET_W}:{TARGET_H}"
+        f":(ow-iw)/2:(oh-ih)/2"
+        f":black"
     )
 
     common_out = [
@@ -239,30 +243,35 @@ def make_segment_clip(media_path, audio_path: str,
     ]
 
     if not media_path or not Path(media_path).exists():
+        # 검정 배경
         vf  = drawtext
         cmd = (["ffmpeg", "-y",
                 "-f", "lavfi",
                 "-i", f"color=black:s={TARGET_W}x{TARGET_H}:d={duration:.3f}",
                 "-i", audio_path,
-                "-vf", vf] + common_out)
+                "-vf", vf]
+               + common_out)
 
     elif ext in (".jpg", ".jpeg", ".png", ".webp"):
         vf  = f"{scale_pad},{drawtext}"
         cmd = (["ffmpeg", "-y",
                 "-loop", "1", "-i", media_path,
                 "-i", audio_path,
-                "-vf", vf] + common_out)
+                "-vf", vf]
+               + common_out)
 
-    else:   # gif / mp4 / 기타 영상
+    else:
+        # GIF / 영상 (stream_loop 무한 반복)
         vf  = f"{scale_pad},{drawtext}"
         cmd = (["ffmpeg", "-y",
                 "-stream_loop", "-1", "-i", media_path,
                 "-i", audio_path,
-                "-vf", vf] + common_out)
+                "-vf", vf]
+               + common_out)
 
     code, _, err = run_cmd(cmd, timeout=60)
     if code != 0:
-        print(f"    ⚠️  clip 생성 실패:\n{err[-400:]}")
+        print(f"    ⚠️  clip 생성 실패:\n{err[-500:]}")
         return False
     return True
 
@@ -274,7 +283,9 @@ def concat_clips(clip_paths: list, out_path: Path) -> bool:
     list_file = TMP_DIR / "concat_list.txt"
     with open(list_file, "w", encoding="utf-8") as f:
         for p in clip_paths:
-            f.write(f"file '{str(p).replace(chr(92), '/')}'\n")
+            # Windows 경로 → 슬래시로 통일 (ffmpeg concat 호환)
+            fp = str(p).replace("\\", "/")
+            f.write(f"file '{fp}'\n")
 
     cmd = ["ffmpeg", "-y",
            "-f", "concat", "-safe", "0",
@@ -299,7 +310,7 @@ def apply_speed(in_path: Path, out_path: Path, speed: float = 1.5) -> bool:
            str(out_path)]
     code, _, err = run_cmd(cmd, timeout=120)
     if code != 0:
-        print(f"  ⚠️  배속 변경 실패:\n{err[-300:]}")
+        print(f"  ⚠️  배속 실패:\n{err[-300:]}")
         return False
     return True
 
@@ -370,7 +381,7 @@ def assemble(script_path=None):
         seg["audio_duration"] = get_audio_duration(str(ap))
         print(f"       → {seg['audio_duration']:.2f}초")
 
-    # ── 2. 세그먼트 클립 생성 ─────────────────────────────────────
+    # ── 2. 세그먼트 클립 ──────────────────────────────────────────
     print("\n[2/5] 세그먼트 클립 생성 중...")
     used, clip_paths = set(), []
 
