@@ -73,11 +73,21 @@ BGM_DIR     = BASE / "bgm"
 # 쇼츠 9:16 비율
 TARGET_W, TARGET_H = 1080, 1920
 
-# 미디어 박스 영역 (화면 중앙, 상단 20%~65%)
-BOX_X      = 40
-BOX_Y      = int(TARGET_H * 0.20)
-BOX_W      = TARGET_W - 80
-BOX_H      = int(TARGET_H * 0.45)
+# ── 레이아웃 영역 정의 ──────────────────────────────────────────────
+# [0~18%]   헤더/제목
+# [20~35%]  자막 영역  ← 눈에 잘 띄는 중단 위치
+# [37~90%]  미디어 박스 (GIF/이미지)
+# [91~100%] 하단 여백
+
+HEADER_H  = int(TARGET_H * 0.18)   # 헤더 높이: 0~345px
+
+SUB_TOP   = int(TARGET_H * 0.20)   # 자막 영역 시작: 384px
+SUB_BOT   = int(TARGET_H * 0.35)   # 자막 영역 끝:   672px
+
+BOX_X     = 40
+BOX_Y     = int(TARGET_H * 0.37)   # 이미지 박스 시작: 710px
+BOX_W     = TARGET_W - 80          # 1000px
+BOX_H     = int(TARGET_H * 0.53)   # 이미지 박스 높이: 1018px (37~90%)
 
 # 배경색 (레퍼런스: 밝은 크림/베이지)
 BG_COLOR   = (245, 242, 235)
@@ -233,86 +243,85 @@ def draw_text_with_outline(draw, x, y, text, font, color, outline_color,
 
 
 # ══════════════════════════════════════════════════════════════════
-# 배경 프레임 생성 (레퍼런스 스타일)
-# - 밝은 크림 배경
-# - 상단 타이틀
-# - 중앙 미디어 박스 (border)
-# - 하단 자막 영역
+# 배경 프레임 생성
+# 레이아웃:
+#   [0~18%]   헤더/제목
+#   [20~35%]  자막 영역 (텍스트는 overlay로 별도 처리)
+#   [37~90%]  미디어 박스
 # ══════════════════════════════════════════════════════════════════
-def make_bg_frame(title: str, narration: str, out_path: Path):
+def make_bg_frame(title: str, out_path: Path):
     """
-    배경 PNG 생성 (고품질 v2)
-    구조:
-      [상단 18%] 그라데이션 헤더 + 볼드 타이틀
-      [중단 46%] 미디어 박스 (둥근 모서리 효과 + 그림자)
-      [하단 36%] 자막 (흰 글자 + 반투명 배경 패널)
+    배경 PNG 생성.
+    narration 자막은 overlay로 별도 처리하므로 배경에 포함하지 않음.
     """
-    from PIL import ImageFilter
-
-    # ── 배경: 밝은 크림 ────────────────────────────────────────────
     img  = Image.new("RGB", (TARGET_W, TARGET_H), (248, 245, 238))
     draw = ImageDraw.Draw(img)
 
-    # 배경 미묘한 그라데이션 느낌 (상단 살짝 어둡게)
+    # 배경 그라데이션
     for y in range(TARGET_H):
         t = y / TARGET_H
-        r = int(248 - t * 8)
-        g = int(245 - t * 10)
-        b = int(238 - t * 15)
-        draw.line([(0, y), (TARGET_W, y)], fill=(r, g, b))
+        draw.line([(0, y), (TARGET_W, y)],
+                  fill=(int(248-t*8), int(245-t*10), int(238-t*15)))
 
-    # ── 상단 헤더 (그라데이션 블랙) ────────────────────────────────
-    header_h = int(TARGET_H * 0.18)
-    for y in range(header_h):
-        t  = y / header_h
-        # 위쪽은 진한 검정, 아래쪽으로 살짝 밝아짐
-        c  = int(15 + t * 20)
+    # ── 상단 헤더 ─────────────────────────────────────────────────
+    for y in range(HEADER_H):
+        c = int(15 + (y / HEADER_H) * 20)
         draw.line([(0, y), (TARGET_W, y)], fill=(c, c, c))
 
-    # 헤더 하단 포인트 라인 (연보라)
-    draw.rectangle([0, header_h - 5, TARGET_W, header_h], fill=(180, 140, 255))
+    # 헤더 하단 포인트 라인
+    draw.rectangle([0, HEADER_H-5, TARGET_W, HEADER_H], fill=(180, 140, 255))
 
     # 타이틀 텍스트
     title_font = get_font(54)
     t_lines    = wrap_text(draw, title, title_font, TARGET_W - 80)
     lh         = draw.textbbox((0,0), "가", font=title_font)[3] + 16
     t_total    = lh * len(t_lines)
-    t_y        = (header_h - t_total) // 2
+    t_y        = (HEADER_H - t_total) // 2
 
     for i, line in enumerate(t_lines):
         tw = draw.textbbox((0,0), line, font=title_font)[2]
         tx = (TARGET_W - tw) // 2
         ty = t_y + i * lh
-        # 미세한 그림자
-        draw.text((tx+2, ty+2), line, font=title_font, fill=(0, 0, 0, 120))
+        draw.text((tx+2, ty+2), line, font=title_font, fill=(0, 0, 0))
         draw.text((tx, ty), line, font=title_font, fill=(255, 255, 255))
 
+    # ── 자막 영역 표시 (텍스트는 overlay로 처리, 여기선 구분선만) ──
+    draw.rectangle([0, SUB_TOP-2, TARGET_W, SUB_TOP-2], fill=(180, 140, 255))
+
     # ── 미디어 박스 ────────────────────────────────────────────────
-    bx1, by1 = BOX_X,         BOX_Y
-    bx2, by2 = BOX_X + BOX_W, BOX_Y + BOX_H
+    bx1 = BOX_X
+    by1 = BOX_Y
+    bx2 = BOX_X + BOX_W
+    by2 = BOX_Y + BOX_H
 
-    # 그림자 효과 (박스 오른쪽/아래에 어두운 사각형)
-    shadow_off = 10
-    draw.rectangle([bx1 + shadow_off, by1 + shadow_off,
-                    bx2 + shadow_off, by2 + shadow_off],
-                   fill=(160, 155, 145))
-
-    # 박스 내부 (진한 회색 — 미디어가 올라갈 자리)
+    # 그림자
+    draw.rectangle([bx1+10, by1+10, bx2+10, by2+10], fill=(160, 155, 145))
+    # 박스 내부
     draw.rectangle([bx1, by1, bx2, by2], fill=(25, 25, 25))
-
-    # 박스 테두리 (두께 6)
+    # 테두리
     draw.rectangle([bx1-3, by1-3, bx2+3, by2+3],
                    outline=(70, 65, 60), width=6)
 
-    # ── 자막 텍스트 (패널 배경 없이 텍스트만) ─────────────────────
-    sub_panel_y = by2 + 50
-    sub_panel_h = TARGET_H - sub_panel_y - 30
+    img.save(str(out_path), "PNG")
 
-    sub_font  = get_font(48)
-    sub_lines = wrap_text(draw, narration, sub_font, TARGET_W - 80)
-    slh       = draw.textbbox((0,0), "가", font=sub_font)[3] + 18
+
+# ══════════════════════════════════════════════════════════════════
+# 자막 PNG 생성 (자막 영역 SUB_TOP~SUB_BOT 기준)
+# ══════════════════════════════════════════════════════════════════
+def make_subtitle_png(text: str, out_path: Path):
+    """
+    자막 텍스트를 중단 자막 영역(SUB_TOP~SUB_BOT)에 렌더링한 PNG.
+    배경 투명, 흰 글자 + 검정 외곽선.
+    """
+    img  = Image.new("RGBA", (TARGET_W, TARGET_H), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+
+    sub_font  = get_font(52)
+    area_h    = SUB_BOT - SUB_TOP
+    sub_lines = wrap_text(draw, text, sub_font, TARGET_W - 80)
+    slh       = draw.textbbox((0,0), "가", font=sub_font)[3] + 16
     s_total   = slh * len(sub_lines)
-    sy        = sub_panel_y + (sub_panel_h - s_total) // 2
+    sy        = SUB_TOP + (area_h - s_total) // 2
 
     for i, line in enumerate(sub_lines):
         tw = draw.textbbox((0,0), line, font=sub_font)[2]
@@ -324,6 +333,24 @@ def make_bg_frame(title: str, narration: str, out_path: Path):
                                outline_w=3)
 
     img.save(str(out_path), "PNG")
+
+
+# ══════════════════════════════════════════════════════════════════
+# narration 2분할
+# ══════════════════════════════════════════════════════════════════
+def split_narration(text: str) -> tuple:
+    """
+    narration을 단어 기준 절반으로 나눔.
+    앞 절반 → 첫 번째 자막, 뒷 절반 → 두 번째 자막.
+    단어가 1개면 동일 텍스트 반환.
+    """
+    words = text.split()
+    if len(words) <= 1:
+        return text, text
+    mid   = max(1, len(words) // 2)
+    first = " ".join(words[:mid])
+    second= " ".join(words[mid:])
+    return first, second
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -423,98 +450,107 @@ def _fallback_pexels(query: str):
 
 # ══════════════════════════════════════════════════════════════════
 # 세그먼트 클립 생성
-# 구조: 배경PNG + 미디어(GIF/이미지) 박스 overlay
+# 구조:
+#   배경PNG(제목+이미지박스윤곽) + 미디어 overlay + 자막 2분할 overlay
 # ══════════════════════════════════════════════════════════════════
 def make_segment_clip(media_path, audio_path: str,
                       title: str, narration: str,
                       duration: float,
                       out_path: Path, idx: int) -> bool:
 
-    bg_png    = TMP_DIR / f"bg_{idx:02d}.png"
-    media_mp4 = TMP_DIR / f"media_{idx:02d}.mp4"
+    bg_png     = TMP_DIR / f"bg_{idx:02d}.png"
+    media_mp4  = TMP_DIR / f"media_{idx:02d}.mp4"
+    bg_vid     = TMP_DIR / f"bg_vid_{idx:02d}.mp4"
+    combined   = TMP_DIR / f"combined_{idx:02d}.mp4"
+    sub1_png   = TMP_DIR / f"sub1_{idx:02d}.png"
+    sub2_png   = TMP_DIR / f"sub2_{idx:02d}.png"
 
-    # 1. 배경 PNG 생성 (커스텀 이미지 우선, 없으면 자동 생성)
+    # ── 1. 배경 PNG 생성 ─────────────────────────────────────────
     if CUSTOM_BG_PATH and Path(CUSTOM_BG_PATH).exists():
-        _overlay_text_on_custom_bg(CUSTOM_BG_PATH, title, narration, bg_png)
+        _overlay_text_on_custom_bg(CUSTOM_BG_PATH, title, "", bg_png,
+                                   title_only=True)
     else:
-        make_bg_frame(title, narration, bg_png)
+        make_bg_frame(title, bg_png)
 
-    # 2. 배경 PNG → 고정 프레임 영상 (오디오 포함, -r 30 강제)
-    bg_vid = TMP_DIR / f"bg_vid_{idx:02d}.mp4"
-    cmd_bg = [
-        "ffmpeg", "-y",
-        "-loop", "1", "-i", str(bg_png),
-        "-i", audio_path,
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-        "-r", "30",                      # 고정 프레임레이트 → setpts 정확
-        "-c:a", "aac", "-b:a", "128k",
-        "-t", f"{duration:.3f}",
-        "-pix_fmt", "yuv420p",
-        str(bg_vid),
-    ]
+    # ── 2. 배경 PNG → 영상 (오디오 포함, -r 30) ──────────────────
+    cmd_bg = ["ffmpeg", "-y",
+              "-loop", "1", "-i", str(bg_png),
+              "-i", audio_path,
+              "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+              "-r", "30", "-c:a", "aac", "-b:a", "128k",
+              "-t", f"{duration:.3f}", "-pix_fmt", "yuv420p",
+              str(bg_vid)]
     code, _, err = run_cmd(cmd_bg, timeout=60)
     if code != 0:
         print(f"    ⚠️  배경 영상 생성 실패:\n{err[-300:]}")
         return False
 
-    # 3. 미디어(GIF/이미지/영상)를 BOX 크기로 스케일 후 배경 위에 overlay
+    # ── 3. 미디어를 BOX 크기로 변환 ──────────────────────────────
+    scale_vf = (f"scale={BOX_W}:{BOX_H}"
+                f":force_original_aspect_ratio=decrease"
+                f",pad={BOX_W}:{BOX_H}:(ow-iw)/2:(oh-ih)/2:black")
+
     if media_path and Path(media_path).exists():
         ext = Path(media_path).suffix.lower()
-
-        # 미디어를 BOX_W x BOX_H 로 스케일 (비율 유지, 패드)
-        scale_vf = (
-            f"scale={BOX_W}:{BOX_H}"
-            f":force_original_aspect_ratio=decrease"
-            f",pad={BOX_W}:{BOX_H}:(ow-iw)/2:(oh-ih)/2:black"
-        )
-
-        # 미디어 클립 생성 (오디오 없음, -r 30)
         if ext in (".jpg", ".jpeg", ".png", ".webp"):
-            cmd_m = ["ffmpeg", "-y",
-                     "-loop", "1", "-i", media_path,
-                     "-vf", scale_vf,
-                     "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-                     "-r", "30", "-an",
-                     "-t", f"{duration:.3f}",
-                     "-pix_fmt", "yuv420p",
-                     str(media_mp4)]
-        else:  # gif / mp4
-            cmd_m = ["ffmpeg", "-y",
-                     "-stream_loop", "-1", "-i", media_path,
-                     "-vf", scale_vf,
-                     "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-                     "-r", "30", "-an",
-                     "-t", f"{duration:.3f}",
-                     "-pix_fmt", "yuv420p",
-                     str(media_mp4)]
+            cmd_m = ["ffmpeg", "-y", "-loop", "1", "-i", media_path,
+                     "-vf", scale_vf, "-c:v", "libx264", "-preset", "veryfast",
+                     "-crf", "23", "-r", "30", "-an",
+                     "-t", f"{duration:.3f}", "-pix_fmt", "yuv420p", str(media_mp4)]
+        else:
+            cmd_m = ["ffmpeg", "-y", "-stream_loop", "-1", "-i", media_path,
+                     "-vf", scale_vf, "-c:v", "libx264", "-preset", "veryfast",
+                     "-crf", "23", "-r", "30", "-an",
+                     "-t", f"{duration:.3f}", "-pix_fmt", "yuv420p", str(media_mp4)]
 
         code2, _, err2 = run_cmd(cmd_m, timeout=60)
         if code2 != 0:
-            print(f"    ⚠️  미디어 변환 실패 → 배경만 사용\n{err2[-200:]}")
-            shutil.copy(str(bg_vid), str(out_path))
-            return out_path.exists()
-
-        # 배경 위에 미디어 overlay (BOX_X, BOX_Y 위치)
-        overlay_vf = f"overlay={BOX_X}:{BOX_Y}"
-        cmd_ov = [
-            "ffmpeg", "-y",
-            "-i", str(bg_vid),
-            "-i", str(media_mp4),
-            "-filter_complex", overlay_vf,
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-            "-r", "30",
-            "-c:a", "copy",
-            "-t", f"{duration:.3f}",
-            "-pix_fmt", "yuv420p",
-            str(out_path),
-        ]
-        code3, _, err3 = run_cmd(cmd_ov, timeout=60)
-        if code3 != 0:
-            print(f"    ⚠️  overlay 실패 → 배경만 사용\n{err3[-200:]}")
-            shutil.copy(str(bg_vid), str(out_path))
+            print(f"    ⚠️  미디어 변환 실패 → 배경만\n{err2[-200:]}")
+            shutil.copy(str(bg_vid), str(combined))
+        else:
+            # 배경 위에 미디어 overlay
+            cmd_ov = ["ffmpeg", "-y",
+                      "-i", str(bg_vid), "-i", str(media_mp4),
+                      "-filter_complex", f"overlay={BOX_X}:{BOX_Y}",
+                      "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+                      "-r", "30", "-c:a", "copy",
+                      "-t", f"{duration:.3f}", "-pix_fmt", "yuv420p",
+                      str(combined)]
+            code3, _, err3 = run_cmd(cmd_ov, timeout=60)
+            if code3 != 0:
+                print(f"    ⚠️  overlay 실패 → 배경만\n{err3[-200:]}")
+                shutil.copy(str(bg_vid), str(combined))
     else:
-        # 미디어 없음 → 배경 영상 그대로
-        shutil.copy(str(bg_vid), str(out_path))
+        shutil.copy(str(bg_vid), str(combined))
+
+    # ── 4. 자막 2분할 PNG 생성 ────────────────────────────────────
+    first_text, second_text = split_narration(narration)
+    make_subtitle_png(first_text,  sub1_png)
+    make_subtitle_png(second_text, sub2_png)
+
+    half = duration / 2.0
+
+    # ── 5. 자막 2개를 enable 조건으로 타이밍 분리하여 overlay ─────
+    # 첫 번째 자막: 0 ~ duration/2
+    # 두 번째 자막: duration/2 ~ duration
+    filter_complex = (
+        f"[0:v][1:v]overlay=0:0:enable='between(t,0,{half:.3f})'[v1];"
+        f"[v1][2:v]overlay=0:0:enable='between(t,{half:.3f},{duration:.3f})'[vout]"
+    )
+    cmd_sub = ["ffmpeg", "-y",
+               "-i", str(combined),
+               "-i", str(sub1_png),
+               "-i", str(sub2_png),
+               "-filter_complex", filter_complex,
+               "-map", "[vout]", "-map", "0:a",
+               "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+               "-r", "30", "-c:a", "copy",
+               "-t", f"{duration:.3f}", "-pix_fmt", "yuv420p",
+               str(out_path)]
+    code4, _, err4 = run_cmd(cmd_sub, timeout=60)
+    if code4 != 0:
+        print(f"    ⚠️  자막 overlay 실패 → 자막 없이 사용\n{err4[-200:]}")
+        shutil.copy(str(combined), str(out_path))
 
     return out_path.exists()
 
@@ -628,28 +664,21 @@ def make_ending_clip(title: str, out_path: Path, duration: float = 2.0) -> bool:
 def _overlay_text_on_custom_bg(bg_path: str, title: str, narration: str,
                                 out_path: Path, title_only: bool = False):
     """
-    커스텀 배경 이미지(1080x1920) 위에 제목+자막만 PIL로 오버레이.
-    미디어 박스 영역(BOX_X, BOX_Y, BOX_W, BOX_H)은 투명하게 비워둠.
-
-    bg_path:    사용자가 직접 만든 배경 PNG/JPG (1080x1920 권장)
-    title:      상단에 표시할 제목 텍스트
-    narration:  하단에 표시할 자막 텍스트
-    title_only: True면 자막 없이 제목만 (엔딩 카드용)
+    커스텀 배경 위에 제목 텍스트만 오버레이.
+    narration 자막은 make_subtitle_png + ffmpeg overlay로 별도 처리되므로 여기선 생략.
     """
-    # 배경 이미지 로드 + 1080x1920으로 리사이즈
     bg = Image.open(bg_path).convert("RGB")
     if bg.size != (TARGET_W, TARGET_H):
         bg = bg.resize((TARGET_W, TARGET_H), Image.LANCZOS)
 
     draw = ImageDraw.Draw(bg)
 
-    # ── 상단 제목 영역 (헤더 바 없이 텍스트만) ──────────────────────
+    # 상단 제목
     title_font = get_font(54)
-    header_h   = int(TARGET_H * 0.18)
     t_lines    = wrap_text(draw, title, title_font, TARGET_W - 80)
     lh         = draw.textbbox((0,0), "가", font=title_font)[3] + 16
     t_total    = lh * len(t_lines)
-    t_y        = (header_h - t_total) // 2 + 10
+    t_y        = (HEADER_H - t_total) // 2 + 10
 
     for i, line in enumerate(t_lines):
         tw = draw.textbbox((0,0), line, font=title_font)[2]
@@ -658,25 +687,6 @@ def _overlay_text_on_custom_bg(bg_path: str, title: str, narration: str,
         draw_text_with_outline(draw, tx, ty, line, title_font,
                                color=(255, 255, 255),
                                outline_color=(0, 0, 0), outline_w=4)
-
-    # ── 하단 자막 (title_only=False 일 때만) ─────────────────────────
-    if not title_only and narration.strip():
-        sub_font   = get_font(48)
-        by2        = BOX_Y + BOX_H
-        sub_lines  = wrap_text(draw, narration, sub_font, TARGET_W - 80)
-        slh        = draw.textbbox((0,0), "가", font=sub_font)[3] + 16
-        sub_total  = slh * len(sub_lines)
-        sub_panel_y = by2 + 50
-        sub_panel_h = TARGET_H - sub_panel_y - 30
-
-        sy = sub_panel_y + (sub_panel_h - sub_total) // 2
-        for i, line in enumerate(sub_lines):
-            tw = draw.textbbox((0,0), line, font=sub_font)[2]
-            tx = (TARGET_W - tw) // 2
-            ty = sy + i * slh
-            draw_text_with_outline(draw, tx, ty, line, sub_font,
-                                   color=(255, 255, 255),
-                                   outline_color=(0, 0, 0), outline_w=3)
 
     bg.save(str(out_path), "PNG")
 def concat_clips(clip_paths: list, out_path: Path) -> bool:
