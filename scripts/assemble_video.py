@@ -1,11 +1,11 @@
 # =============================================
-# WISSLIST - 영상 자동 조립 v8
+# WISSLIST - 영상 자동 조립 v9
 # 실행: python D:\WISSLIST\scripts\assemble_video.py
 #
-# v8 수정:
-#  - Windows cp949 인코딩 오류 해결
-#    subprocess.run에 encoding/errors 파라미터 통일
-#  - r.stderr None 방어 처리
+# v9 수정:
+#  - run_cmd에서 FileNotFoundError 캐치 → 자동 폴백
+#  - edge-tts 명령어 없을 때 python -m edge_tts 로 자동 재시도
+#  - subprocess 안정성 전반 개선
 # =============================================
 
 import json
@@ -31,56 +31,83 @@ FONT_PATH = "C:/Windows/Fonts/malgun.ttf"
 
 
 # ══════════════════════════════════════════════════════════════════
-# subprocess 공통 실행 헬퍼
-# Windows cp949 오류 핵심 해결:
-#   text=False → bytes로 받은 뒤 utf-8로 직접 디코딩
+# subprocess 공통 헬퍼
+# FileNotFoundError / TimeoutExpired 모두 안전하게 처리
 # ══════════════════════════════════════════════════════════════════
-def run_cmd(cmd: list, timeout: int = 120) -> tuple[int, str, str]:
+def run_cmd(cmd: list, timeout: int = 120) -> tuple:
     """
     반환: (returncode, stdout_str, stderr_str)
-    인코딩 오류가 있어도 replace로 대체해서 절대 crash 안 남.
+    - 명령어 자체가 없으면(FileNotFoundError) → (2, "", "not found")
+    - 타임아웃 → (1, "", "timeout")
+    - 인코딩 오류는 errors='replace' 로 안전 처리
     """
-    r = subprocess.run(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        timeout=timeout,
-    )
-    stdout = r.stdout.decode("utf-8", errors="replace") if r.stdout else ""
-    stderr = r.stderr.decode("utf-8", errors="replace") if r.stderr else ""
-    return r.returncode, stdout, stderr
+    try:
+        r = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+        )
+        stdout = r.stdout.decode("utf-8", errors="replace") if r.stdout else ""
+        stderr = r.stderr.decode("utf-8", errors="replace") if r.stderr else ""
+        return r.returncode, stdout, stderr
+
+    except FileNotFoundError:
+        return 2, "", f"명령어를 찾을 수 없음: {cmd[0]}"
+
+    except subprocess.TimeoutExpired:
+        return 1, "", f"타임아웃 ({timeout}초 초과)"
+
+    except Exception as e:
+        return 1, "", str(e)
 
 
 # ══════════════════════════════════════════════════════════════════
-# ffmpeg 확인
+# ffmpeg / ffprobe 확인
 # ══════════════════════════════════════════════════════════════════
 def check_ffmpeg():
-    code, _, _ = run_cmd(["ffmpeg", "-version"], timeout=10)
+    code, _, err = run_cmd(["ffmpeg", "-version"], timeout=10)
     if code != 0:
-        print("❌ ffmpeg가 설치되어 있지 않습니다.")
+        print("❌ ffmpeg를 찾을 수 없습니다.")
+        print(f"   오류: {err}")
         print("   D:\\ffmpeg\\bin\\ffmpeg.exe 설치 후 PATH 환경변수 등록 필요")
         sys.exit(1)
     print("✅ ffmpeg 확인 완료")
 
 
 # ══════════════════════════════════════════════════════════════════
-# TTS — edge-tts CLI subprocess (asyncio 없음)
+# TTS — edge-tts CLI → 없으면 python -m edge_tts 자동 폴백
 # ══════════════════════════════════════════════════════════════════
 def make_tts(text: str, out_path: Path, voice: str = "ko-KR-SunHiNeural"):
-    cmd = [
-        "edge-tts",
+    """
+    1차: edge-tts CLI 시도
+    2차: python -m edge_tts 로 자동 재시도 (PATH 미등록 시)
+    """
+    base_args = [
         "--voice", voice,
         "--rate", "+5%",
         "--text", text,
         "--write-media", str(out_path),
     ]
-    code, _, err = run_cmd(cmd, timeout=30)
+
+    # 1차 시도 — edge-tts 명령어
+    code, _, err = run_cmd(["edge-tts"] + base_args, timeout=30)
+
+    # 실패 시(명령어 없음 포함) 2차 시도 — python -m edge_tts
     if code != 0:
-        # PATH에 edge-tts가 없으면 python -m edge_tts 로 재시도
-        cmd2 = [sys.executable, "-m", "edge_tts"] + cmd[1:]
-        code2, _, err2 = run_cmd(cmd2, timeout=30)
+        print(f"  ⚠️  edge-tts CLI 실패 ({err[:60]}) → python -m edge_tts 재시도")
+        code2, _, err2 = run_cmd(
+            [sys.executable, "-m", "edge_tts"] + base_args,
+            timeout=30,
+        )
         if code2 != 0:
-            raise RuntimeError(f"edge-tts 실패: {err2[:200]}")
+            raise RuntimeError(
+                f"TTS 생성 실패.\n"
+                f"  1차 오류: {err[:100]}\n"
+                f"  2차 오류: {err2[:100]}\n"
+                f"  해결: pip install edge-tts"
+            )
+
     size_kb = out_path.stat().st_size // 1024
     print(f"  🎙️  {out_path.name}  ({size_kb}KB)")
 
@@ -96,7 +123,7 @@ def get_audio_duration(path: str) -> float:
     try:
         return float(out.strip())
     except ValueError:
-        return 2.0   # 파싱 실패 시 기본값
+        return 2.0
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -119,7 +146,8 @@ def find_best_media(visual_tags: list,
         score = len(set(visual_tags) & set(item["all_tags"]))
         if score == 0:
             continue
-        bucket = scored_gif if item["file"].lower().endswith(".gif") else scored_other
+        bucket = (scored_gif if item["file"].lower().endswith(".gif")
+                  else scored_other)
         bucket.append((score, item))
 
     pool = scored_gif if (prefer_gif and scored_gif) else (scored_gif + scored_other)
@@ -164,7 +192,7 @@ def _fallback_pexels(query: str):
 
 
 # ══════════════════════════════════════════════════════════════════
-# ffmpeg drawtext 자막 이스케이프
+# 자막 이스케이프
 # ══════════════════════════════════════════════════════════════════
 def _escape_drawtext(text: str) -> str:
     for ch in ["\\", "'", ":", "[", "]"]:
@@ -173,7 +201,7 @@ def _escape_drawtext(text: str) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════
-# 세그먼트 클립 생성 (ffmpeg 직접)
+# 세그먼트 클립 생성
 # ══════════════════════════════════════════════════════════════════
 def make_segment_clip(media_path, audio_path: str,
                       subtitle: str, duration: float,
@@ -211,46 +239,36 @@ def make_segment_clip(media_path, audio_path: str,
     ]
 
     if not media_path or not Path(media_path).exists():
+        vf  = drawtext
         cmd = (["ffmpeg", "-y",
                 "-f", "lavfi",
                 "-i", f"color=black:s={TARGET_W}x{TARGET_H}:d={duration:.3f}",
                 "-i", audio_path,
-                "-vf", drawtext]
-               + common_out)
+                "-vf", vf] + common_out)
 
     elif ext in (".jpg", ".jpeg", ".png", ".webp"):
-        vf = f"{scale_pad},{drawtext}"
+        vf  = f"{scale_pad},{drawtext}"
         cmd = (["ffmpeg", "-y",
                 "-loop", "1", "-i", media_path,
                 "-i", audio_path,
-                "-vf", vf]
-               + common_out)
+                "-vf", vf] + common_out)
 
-    elif ext == ".gif":
-        vf = f"{scale_pad},{drawtext}"
+    else:   # gif / mp4 / 기타 영상
+        vf  = f"{scale_pad},{drawtext}"
         cmd = (["ffmpeg", "-y",
                 "-stream_loop", "-1", "-i", media_path,
                 "-i", audio_path,
-                "-vf", vf]
-               + common_out)
-
-    else:
-        vf = f"{scale_pad},{drawtext}"
-        cmd = (["ffmpeg", "-y",
-                "-stream_loop", "-1", "-i", media_path,
-                "-i", audio_path,
-                "-vf", vf]
-               + common_out)
+                "-vf", vf] + common_out)
 
     code, _, err = run_cmd(cmd, timeout=60)
     if code != 0:
-        print(f"    ⚠️  ffmpeg 오류 (clip 생성):\n{err[-400:]}")
+        print(f"    ⚠️  clip 생성 실패:\n{err[-400:]}")
         return False
     return True
 
 
 # ══════════════════════════════════════════════════════════════════
-# concat + 1.5배속 + BGM
+# concat + 배속 + BGM
 # ══════════════════════════════════════════════════════════════════
 def concat_clips(clip_paths: list, out_path: Path) -> bool:
     list_file = TMP_DIR / "concat_list.txt"
@@ -265,7 +283,7 @@ def concat_clips(clip_paths: list, out_path: Path) -> bool:
            str(out_path)]
     code, _, err = run_cmd(cmd, timeout=120)
     if code != 0:
-        print(f"  ⚠️  concat 오류:\n{err[-300:]}")
+        print(f"  ⚠️  concat 실패:\n{err[-300:]}")
         return False
     return True
 
@@ -281,7 +299,7 @@ def apply_speed(in_path: Path, out_path: Path, speed: float = 1.5) -> bool:
            str(out_path)]
     code, _, err = run_cmd(cmd, timeout=120)
     if code != 0:
-        print(f"  ⚠️  속도 변경 오류:\n{err[-300:]}")
+        print(f"  ⚠️  배속 변경 실패:\n{err[-300:]}")
         return False
     return True
 
@@ -290,6 +308,7 @@ def add_bgm(video_path: Path, out_path: Path, bgm_volume: float = 0.15) -> bool:
     bgm_files = list(BGM_DIR.glob("*.mp3")) + list(BGM_DIR.glob("*.m4a"))
     if not bgm_files:
         print("  ℹ️  bgm/ 폴더에 mp3 없음 → BGM 없이 저장")
+        print(f"     D:\\WISSLIST\\bgm\\ 에 mp3 넣으면 다음 실행부터 자동 적용")
         shutil.copy(str(video_path), str(out_path))
         return True
 
@@ -379,7 +398,7 @@ def assemble(script_path=None):
         print("❌ 생성된 클립 없음")
         return None
 
-    # ── 3. concat ────────────────────────────────────────────────
+    # ── 3. concat ─────────────────────────────────────────────────
     print("\n[3/5] 클립 합치는 중...")
     concat_out = TMP_DIR / "concat_raw.mp4"
     if not concat_clips(clip_paths, concat_out):
