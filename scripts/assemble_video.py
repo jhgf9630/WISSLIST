@@ -169,60 +169,100 @@ def draw_text_with_outline(draw, x, y, text, font, color, outline_color,
 # ══════════════════════════════════════════════════════════════════
 def make_bg_frame(title: str, narration: str, out_path: Path):
     """
-    배경 PNG 생성.
+    배경 PNG 생성 (고품질 v2)
     구조:
-      [상단 16%] 채널명/타이틀 텍스트
-      [중단 45%] 미디어 박스 (회색 테두리, 내부는 투명으로 남김)
-      [하단 35%] 나레이션 자막
+      [상단 18%] 그라데이션 헤더 + 볼드 타이틀
+      [중단 46%] 미디어 박스 (둥근 모서리 효과 + 그림자)
+      [하단 36%] 자막 (흰 글자 + 반투명 배경 패널)
     """
-    img  = Image.new("RGB", (TARGET_W, TARGET_H), BG_COLOR)
+    from PIL import ImageFilter
+
+    # ── 배경: 밝은 크림 ────────────────────────────────────────────
+    img  = Image.new("RGB", (TARGET_W, TARGET_H), (248, 245, 238))
     draw = ImageDraw.Draw(img)
 
-    # ── 상단 타이틀 바 ─────────────────────────────────────────────
-    # 어두운 헤더 바
-    draw.rectangle([0, 0, TARGET_W, int(TARGET_H * 0.17)],
-                   fill=(30, 30, 30))
+    # 배경 미묘한 그라데이션 느낌 (상단 살짝 어둡게)
+    for y in range(TARGET_H):
+        t = y / TARGET_H
+        r = int(248 - t * 8)
+        g = int(245 - t * 10)
+        b = int(238 - t * 15)
+        draw.line([(0, y), (TARGET_W, y)], fill=(r, g, b))
 
-    title_font = get_font(52)
-    t_lines    = wrap_text(draw, title, title_font,
-                           max_width=TARGET_W - 60)
-    line_h     = draw.textbbox((0,0), "가", font=title_font)[3] + 14
-    t_total    = line_h * len(t_lines)
-    t_y_start  = (int(TARGET_H * 0.17) - t_total) // 2
+    # ── 상단 헤더 (그라데이션 블랙) ────────────────────────────────
+    header_h = int(TARGET_H * 0.18)
+    for y in range(header_h):
+        t  = y / header_h
+        # 위쪽은 진한 검정, 아래쪽으로 살짝 밝아짐
+        c  = int(15 + t * 20)
+        draw.line([(0, y), (TARGET_W, y)], fill=(c, c, c))
+
+    # 헤더 하단 포인트 라인 (연보라)
+    draw.rectangle([0, header_h - 5, TARGET_W, header_h], fill=(180, 140, 255))
+
+    # 타이틀 텍스트
+    title_font = get_font(54)
+    t_lines    = wrap_text(draw, title, title_font, TARGET_W - 80)
+    lh         = draw.textbbox((0,0), "가", font=title_font)[3] + 16
+    t_total    = lh * len(t_lines)
+    t_y        = (header_h - t_total) // 2
 
     for i, line in enumerate(t_lines):
         tw = draw.textbbox((0,0), line, font=title_font)[2]
         tx = (TARGET_W - tw) // 2
-        ty = t_y_start + i * line_h
+        ty = t_y + i * lh
+        # 미세한 그림자
+        draw.text((tx+2, ty+2), line, font=title_font, fill=(0, 0, 0, 120))
         draw.text((tx, ty), line, font=title_font, fill=(255, 255, 255))
 
-    # ── 미디어 박스 테두리 ──────────────────────────────────────────
-    bx1, by1 = BOX_X,        BOX_Y
+    # ── 미디어 박스 ────────────────────────────────────────────────
+    bx1, by1 = BOX_X,         BOX_Y
     bx2, by2 = BOX_X + BOX_W, BOX_Y + BOX_H
-    # 박스 내부: 검정 (나중에 GIF가 올라갈 자리)
-    draw.rectangle([bx1, by1, bx2, by2], fill=(20, 20, 20))
-    # 테두리
-    draw.rectangle([bx1-4, by1-4, bx2+4, by2+4],
-                   outline=(80, 80, 80), width=4)
 
-    # ── 하단 자막 영역 ─────────────────────────────────────────────
-    sub_font   = get_font(50)
-    sub_lines  = wrap_text(draw, narration, sub_font,
-                           max_width=TARGET_W - 80)
-    sub_line_h = draw.textbbox((0,0), "가", font=sub_font)[3] + 16
-    sub_total  = sub_line_h * len(sub_lines)
+    # 그림자 효과 (박스 오른쪽/아래에 어두운 사각형)
+    shadow_off = 10
+    draw.rectangle([bx1 + shadow_off, by1 + shadow_off,
+                    bx2 + shadow_off, by2 + shadow_off],
+                   fill=(160, 155, 145))
 
-    # 자막 영역 시작: 박스 아래 60px
-    sub_y_start = by2 + 60
+    # 박스 내부 (진한 회색 — 미디어가 올라갈 자리)
+    draw.rectangle([bx1, by1, bx2, by2], fill=(25, 25, 25))
+
+    # 박스 테두리 (두께 6)
+    draw.rectangle([bx1-3, by1-3, bx2+3, by2+3],
+                   outline=(70, 65, 60), width=6)
+
+    # ── 자막 패널 (반투명 박스 + 텍스트) ──────────────────────────
+    sub_panel_y = by2 + 40
+    sub_panel_h = TARGET_H - sub_panel_y - 30
+
+    # 반투명 패널
+    panel = Image.new("RGBA", (TARGET_W - 60, sub_panel_h), (30, 28, 25, 210))
+    img_rgba = img.convert("RGBA")
+    img_rgba.paste(panel, (30, sub_panel_y), panel)
+    img = img_rgba.convert("RGB")
+    draw = ImageDraw.Draw(img)
+
+    # 패널 테두리
+    draw.rectangle([30, sub_panel_y, TARGET_W-30,
+                    sub_panel_y + sub_panel_h],
+                   outline=(100, 95, 90), width=2)
+
+    # 자막 텍스트
+    sub_font  = get_font(48)
+    sub_lines = wrap_text(draw, narration, sub_font, TARGET_W - 120)
+    slh       = draw.textbbox((0,0), "가", font=sub_font)[3] + 18
+    s_total   = slh * len(sub_lines)
+    sy        = sub_panel_y + (sub_panel_h - s_total) // 2
 
     for i, line in enumerate(sub_lines):
         tw = draw.textbbox((0,0), line, font=sub_font)[2]
         tx = (TARGET_W - tw) // 2
-        ty = sub_y_start + i * sub_line_h
+        ty = sy + i * slh
         draw_text_with_outline(draw, tx, ty, line, sub_font,
-                                color=(30,30,30),
-                                outline_color=(200,200,200),
-                                outline_w=2)
+                               color=(255, 255, 255),
+                               outline_color=(0, 0, 0),
+                               outline_w=3)
 
     img.save(str(out_path), "PNG")
 
@@ -384,36 +424,90 @@ def make_segment_clip(media_path, audio_path: str,
 # 엔딩 카드
 # ══════════════════════════════════════════════════════════════════
 def make_ending_clip(title: str, out_path: Path, duration: float = 2.0) -> bool:
+    """
+    고품질 엔딩 카드 (v2)
+    - 그라데이션 배경
+    - 채널 로고 영역
+    - 굵은 제목 + 그림자
+    - 하단 구독 유도 문구
+    """
     card = TMP_DIR / "ending.png"
-
-    img  = Image.new("RGB", (TARGET_W, TARGET_H), (20, 20, 30))
+    img  = Image.new("RGB", (TARGET_W, TARGET_H), (12, 10, 20))
     draw = ImageDraw.Draw(img)
 
-    # 상단 포인트 바
-    draw.rectangle([0, 0, TARGET_W, 10], fill=(120, 80, 255))
+    # 배경 그라데이션 (위: 진한 네이비 → 아래: 짙은 보라)
+    for y in range(TARGET_H):
+        t = y / TARGET_H
+        r = int(12 + t * 30)
+        g = int(10 + t * 5)
+        b = int(20 + t * 40)
+        draw.line([(0, y), (TARGET_W, y)], fill=(r, g, b))
 
-    tf    = get_font(68)
-    cf    = get_font(40)
-    lines = wrap_text(draw, title, tf, TARGET_W - 80)
-    lh    = draw.textbbox((0,0), "가", font=tf)[3] + 22
+    # 중앙 글로우 원형 (연보라 빛)
+    glow_cx, glow_cy = TARGET_W // 2, TARGET_H // 2 - 60
+    for radius in range(300, 0, -30):
+        alpha = int(18 * (1 - radius / 300))
+        overlay = Image.new("RGBA", (TARGET_W, TARGET_H), (0, 0, 0, 0))
+        ov_draw = ImageDraw.Draw(overlay)
+        ov_draw.ellipse([glow_cx - radius, glow_cy - radius,
+                         glow_cx + radius, glow_cy + radius],
+                        fill=(130, 80, 255, alpha))
+        img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
+        draw = ImageDraw.Draw(img)
+
+    # 상단/하단 포인트 라인
+    draw.rectangle([0, 0, TARGET_W, 8],   fill=(150, 100, 255))
+    draw.rectangle([0, TARGET_H-8, TARGET_W, TARGET_H], fill=(150, 100, 255))
+
+    # 채널명 (상단)
+    ch_font = get_font(46)
+    ch_text = "📋 위씨리스트"
+    cw = draw.textbbox((0,0), ch_text, font=ch_font)[2]
+    draw_text_with_outline(draw, (TARGET_W-cw)//2, 80,
+                           ch_text, ch_font,
+                           color=(200, 180, 255), outline_color=(0,0,0), outline_w=2)
+
+    # 구분선
+    draw.rectangle([100, 160, TARGET_W-100, 164], fill=(100, 80, 180))
+
+    # 제목 (중앙, 대형)
+    tf    = get_font(66)
+    lines = wrap_text(draw, title, tf, TARGET_W - 100)
+    lh    = draw.textbbox((0,0), "가", font=tf)[3] + 24
     total = lh * len(lines)
-    sy    = TARGET_H // 2 - total // 2 - 30
+    sy    = TARGET_H // 2 - total // 2 - 40
 
     for i, line in enumerate(lines):
         tw = draw.textbbox((0,0), line, font=tf)[2]
-        draw_text_with_outline(draw, (TARGET_W-tw)//2, sy+i*lh,
-                               line, tf, (255,255,255), (0,0,0), 4)
+        tx = (TARGET_W - tw) // 2
+        ty = sy + i * lh
+        # 그림자
+        draw.text((tx+4, ty+4), line, font=tf, fill=(0, 0, 0))
+        # 본문
+        draw_text_with_outline(draw, tx, ty, line, tf,
+                               color=(255, 255, 255),
+                               outline_color=(80, 50, 160), outline_w=3)
 
-    cw = draw.textbbox((0,0), "@wisslist", font=cf)[2]
-    draw.text(((TARGET_W-cw)//2, TARGET_H-160), "@wisslist",
-              font=cf, fill=(160, 140, 255))
+    # 하단 구독 유도
+    sub_font = get_font(40)
+    sub_text = "👆 구독하고 다음 영상도 확인하세요"
+    sw = draw.textbbox((0,0), sub_text, font=sub_font)[2]
+    draw.text(((TARGET_W-sw)//2, TARGET_H - 220), sub_text,
+              font=sub_font, fill=(180, 160, 220))
+
+    # @wisslist
+    wf   = get_font(38)
+    wt   = "@wisslist"
+    ww   = draw.textbbox((0,0), wt, font=wf)[2]
+    draw.text(((TARGET_W-ww)//2, TARGET_H - 140), wt,
+              font=wf, fill=(130, 110, 200))
 
     img.save(str(card), "PNG")
 
     cmd = ["ffmpeg", "-y",
            "-loop", "1", "-i", str(card),
            "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
-           "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+           "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
            "-r", "30", "-c:a", "aac", "-b:a", "128k",
            "-t", f"{duration:.1f}", "-pix_fmt", "yuv420p",
            str(out_path)]

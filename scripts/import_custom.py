@@ -20,7 +20,7 @@ BASE       = Path(BASE_DIR)
 IMPORT_DIR = BASE / "media_library" / "import_here"
 CUSTOM_DIR = BASE / "media_library" / "custom"
 
-SUPPORTED = {".jpg",".jpeg",".png",".gif",".mp4",".mov"}
+SUPPORTED = {".jpg",".jpeg",".png",".gif",".mp4",".mov",".webp"}
 
 def run():
     if not BASE.exists():
@@ -34,8 +34,7 @@ def run():
              if f.suffix.lower() in SUPPORTED]
 
     if not files:
-        print(f"
- import_here 폴더가 비어있습니다.")
+        print(f"\n import_here 폴더가 비어있습니다.")
         print(f"   경로: {IMPORT_DIR}")
         print(f"   이미지/GIF/영상 파일을 넣고 다시 실행하세요.")
         return
@@ -43,12 +42,10 @@ def run():
     existing = get_existing_files()
     added = 0
 
-    print(f"
- 커스텀 미디어 임포트 시작: {len(files)}개 발견")
+    print(f"\n 커스텀 미디어 임포트 시작: {len(files)}개 발견")
 
     for f in files:
         dest = CUSTOM_DIR / f.name
-        # 동명 파일 중복 방지
         counter = 1
         while dest.exists():
             dest = CUSTOM_DIR / f"{f.stem}_{counter}{f.suffix}"
@@ -67,18 +64,16 @@ def run():
             "query":         "",
             "provider":      "custom",
             "all_tags":      ["custom"],
-            "clip_verified": False,  # CLIP이 태그 분석 예정
+            "clip_verified": False,
         }
         add_entry(entry)
         print(f"  등록: {dest.name}")
         added += 1
 
-    print(f"
- 임포트 완료: {added}개 등록")
+    print(f"\n 임포트 완료: {added}개 등록")
     print(f"  저장 위치: {CUSTOM_DIR}")
     if added > 0:
-        print(f"
- 다음 단계: CLIP 태그 분석 실행")
+        print(f"\n 다음 단계: CLIP 태그 분석 실행")
         print(f"   python D:/WISSLIST/scripts/clip_tagger.py")
 
 if __name__ == "__main__":
