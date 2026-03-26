@@ -25,6 +25,44 @@ try:
 except ImportError:
     CUSTOM_BG_PATH, CUSTOM_ENDING_PATH = None, None
 
+# ── assets 폴더 자동 감지 ─────────────────────────────────────────
+# config.py에 None으로 설정되어 있어도,
+# D:\WISSLIST\assets\ 에 파일이 있으면 자동으로 사용
+_ASSETS_DIR = Path(BASE_DIR) / "assets"
+_IMG_EXTS   = {".png", ".jpg", ".jpeg"}
+
+def _find_asset(name_hints: list) -> str | None:
+    """
+    assets 폴더에서 name_hints 키워드가 포함된 이미지 파일 탐색.
+    예: ["bg", "background"] → bg.png, my_bg.jpg 등 매칭
+    """
+    if not _ASSETS_DIR.exists():
+        return None
+    for f in sorted(_ASSETS_DIR.iterdir()):
+        if f.suffix.lower() not in _IMG_EXTS:
+            continue
+        fname = f.name.lower()
+        for hint in name_hints:
+            if hint in fname:
+                return str(f)
+    # 힌트 없으면 첫 번째 이미지 반환
+    all_imgs = [f for f in _ASSETS_DIR.iterdir()
+                if f.suffix.lower() in _IMG_EXTS]
+    return str(all_imgs[0]) if all_imgs else None
+
+if not CUSTOM_BG_PATH:
+    CUSTOM_BG_PATH = _find_asset(["bg", "background", "back"])
+if not CUSTOM_ENDING_PATH:
+    CUSTOM_ENDING_PATH = _find_asset(["ending", "end", "outro"])
+    # 엔딩 전용 파일이 없으면 배경 파일을 엔딩으로도 사용
+    if not CUSTOM_ENDING_PATH and CUSTOM_BG_PATH:
+        CUSTOM_ENDING_PATH = CUSTOM_BG_PATH
+
+if CUSTOM_BG_PATH:
+    print(f"✅ 커스텀 배경 감지: {Path(CUSTOM_BG_PATH).name}")
+if CUSTOM_ENDING_PATH:
+    print(f"✅ 커스텀 엔딩 감지: {Path(CUSTOM_ENDING_PATH).name}")
+
 BASE        = Path(BASE_DIR)
 SCRIPT_PATH = BASE / "scripts_json" / "today_script.json"
 AUDIO_DIR   = BASE / "audio"
