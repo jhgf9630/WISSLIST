@@ -143,36 +143,64 @@ def get_audio_duration(path: str) -> float:
 def make_tts(text: str, out_path: Path, voice: str = "ko-KR-SunHiNeural"):
     """
     edge-tts로 TTS 생성.
-    --text 인자로 한국어를 직접 넘기면 Windows subprocess에서
-    인코딩 오류가 발생할 수 있으므로, 텍스트를 UTF-8 파일로 저장 후
-    --file 옵션으로 전달. 이스케이프/인코딩 문제 완전 차단.
+    - 텍스트를 UTF-8 파일로 저장 후 --file 옵션으로 전달 (인코딩 문제 방지)
+    - 네트워크 오류 등에 대비해 최대 3회 재시도
+    - 재시도 사이 1초 대기 (edge-tts 서버 rate limit 방지)
     """
-    # 텍스트를 UTF-8 임시 파일로 저장
+    import time
+
     txt_path = out_path.with_suffix(".txt")
     txt_path.write_text(text, encoding="utf-8")
 
     base_args = [
         "--voice", voice,
         "--rate", "+5%",
-        "--file", str(txt_path),        # ← --text 대신 --file 사용
+        "--file", str(txt_path),
         "--write-media", str(out_path),
     ]
 
-    code, _, _ = run_cmd(["edge-tts"] + base_args, timeout=30)
-    if code != 0:
-        code2, _, err2 = run_cmd(
-            [sys.executable, "-m", "edge_tts"] + base_args, timeout=30)
-        if code2 != 0:
-            raise RuntimeError(
-                f"TTS 실패. pip install edge-tts\n{err2[:300]}")
+    last_err = ""
+    for attempt in range(3):
+        if attempt > 0:
+            time.sleep(1.5)
+            print(f"  🔄 TTS 재시도 {attempt+1}/3...")
 
-    # 임시 텍스트 파일 삭제
+        # 1차: edge-tts CLI
+        code, _, err = run_cmd(["edge-tts"] + base_args, timeout=40)
+        if code == 0 and out_path.exists() and out_path.stat().st_size > 1000:
+            break
+
+        # 2차: python -m edge_tts
+        code2, _, err2 = run_cmd(
+            [sys.executable, "-m", "edge_tts"] + base_args, timeout=40)
+        if code2 == 0 and out_path.exists() and out_path.stat().st_size > 1000:
+            break
+
+        last_err = err2 or err
+    else:
+        # 3회 모두 실패
+        try:
+            txt_path.unlink()
+        except Exception:
+            pass
+        raise RuntimeError(
+            f"TTS 생성 실패 (3회 재시도 초과).\n"
+            f"텍스트: {text[:50]}\n"
+            f"오류: {last_err[:300]}\n\n"
+            f"해결 방법:\n"
+            f"  1. 인터넷 연결 확인\n"
+            f"  2. pip install --upgrade edge-tts\n"
+            f"  3. 잠시 후 다시 실행"
+        )
+
     try:
         txt_path.unlink()
     except Exception:
         pass
 
-    print(f"  🎙️  {out_path.name}  ({out_path.stat().st_size//1024}KB)")
+    size_kb = out_path.stat().st_size // 1024
+    print(f"  🎙️  {out_path.name}  ({size_kb}KB)")
+    time.sleep(0.3)  # 연속 요청 간 짧은 딜레이
 
 
 # ══════════════════════════════════════════════════════════════════
