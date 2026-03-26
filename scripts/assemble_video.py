@@ -507,84 +507,82 @@ def make_ending_clip(title: str, out_path: Path, duration: float = 2.0) -> bool:
     card = TMP_DIR / "ending.png"
 
     if CUSTOM_ENDING_PATH and Path(CUSTOM_ENDING_PATH).exists():
-        # 커스텀 엔딩 위에 제목만 오버레이
+        # ── 커스텀 이미지 위에 제목만 오버레이 ───────────────────────
         _overlay_text_on_custom_bg(
             CUSTOM_ENDING_PATH, title, "", card,
             title_only=True
         )
     else:
-        # ── 자동 생성 엔딩 카드 ────────────────────────────────────
+        # ── 자동 생성 엔딩 카드 (완전히 else 블록 안) ─────────────────
         img  = Image.new("RGB", (TARGET_W, TARGET_H), (12, 10, 20))
         draw = ImageDraw.Draw(img)
 
-    # 배경 그라데이션 (위: 진한 네이비 → 아래: 짙은 보라)
-    for y in range(TARGET_H):
-        t = y / TARGET_H
-        r = int(12 + t * 30)
-        g = int(10 + t * 5)
-        b = int(20 + t * 40)
-        draw.line([(0, y), (TARGET_W, y)], fill=(r, g, b))
+        # 배경 그라데이션 (위: 진한 네이비 → 아래: 짙은 보라)
+        for y in range(TARGET_H):
+            t = y / TARGET_H
+            r = int(12 + t * 30)
+            g = int(10 + t * 5)
+            b = int(20 + t * 40)
+            draw.line([(0, y), (TARGET_W, y)], fill=(r, g, b))
 
-    # 중앙 글로우 원형 (연보라 빛)
-    glow_cx, glow_cy = TARGET_W // 2, TARGET_H // 2 - 60
-    for radius in range(300, 0, -30):
-        alpha = int(18 * (1 - radius / 300))
-        overlay = Image.new("RGBA", (TARGET_W, TARGET_H), (0, 0, 0, 0))
-        ov_draw = ImageDraw.Draw(overlay)
-        ov_draw.ellipse([glow_cx - radius, glow_cy - radius,
-                         glow_cx + radius, glow_cy + radius],
-                        fill=(130, 80, 255, alpha))
-        img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
-        draw = ImageDraw.Draw(img)
+        # 중앙 글로우 원형 (연보라 빛)
+        glow_cx, glow_cy = TARGET_W // 2, TARGET_H // 2 - 60
+        for radius in range(300, 0, -30):
+            alpha = int(18 * (1 - radius / 300))
+            overlay = Image.new("RGBA", (TARGET_W, TARGET_H), (0, 0, 0, 0))
+            ov_draw = ImageDraw.Draw(overlay)
+            ov_draw.ellipse([glow_cx - radius, glow_cy - radius,
+                             glow_cx + radius, glow_cy + radius],
+                            fill=(130, 80, 255, alpha))
+            img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
+            draw = ImageDraw.Draw(img)
 
-    # 상단/하단 포인트 라인
-    draw.rectangle([0, 0, TARGET_W, 8],   fill=(150, 100, 255))
-    draw.rectangle([0, TARGET_H-8, TARGET_W, TARGET_H], fill=(150, 100, 255))
+        # 상단/하단 포인트 라인
+        draw.rectangle([0, 0, TARGET_W, 8],   fill=(150, 100, 255))
+        draw.rectangle([0, TARGET_H-8, TARGET_W, TARGET_H], fill=(150, 100, 255))
 
-    # 채널명 (상단)
-    ch_font = get_font(46)
-    ch_text = "📋 위씨리스트"
-    cw = draw.textbbox((0,0), ch_text, font=ch_font)[2]
-    draw_text_with_outline(draw, (TARGET_W-cw)//2, 80,
-                           ch_text, ch_font,
-                           color=(200, 180, 255), outline_color=(0,0,0), outline_w=2)
+        # 채널명 (상단)
+        ch_font = get_font(46)
+        ch_text = "📋 위씨리스트"
+        cw = draw.textbbox((0,0), ch_text, font=ch_font)[2]
+        draw_text_with_outline(draw, (TARGET_W-cw)//2, 80,
+                               ch_text, ch_font,
+                               color=(200, 180, 255), outline_color=(0,0,0), outline_w=2)
 
-    # 구분선
-    draw.rectangle([100, 160, TARGET_W-100, 164], fill=(100, 80, 180))
+        # 구분선
+        draw.rectangle([100, 160, TARGET_W-100, 164], fill=(100, 80, 180))
 
-    # 제목 (중앙, 대형)
-    tf    = get_font(66)
-    lines = wrap_text(draw, title, tf, TARGET_W - 100)
-    lh    = draw.textbbox((0,0), "가", font=tf)[3] + 24
-    total = lh * len(lines)
-    sy    = TARGET_H // 2 - total // 2 - 40
+        # 제목 (중앙, 대형)
+        tf    = get_font(66)
+        lines = wrap_text(draw, title, tf, TARGET_W - 100)
+        lh    = draw.textbbox((0,0), "가", font=tf)[3] + 24
+        total = lh * len(lines)
+        sy    = TARGET_H // 2 - total // 2 - 40
 
-    for i, line in enumerate(lines):
-        tw = draw.textbbox((0,0), line, font=tf)[2]
-        tx = (TARGET_W - tw) // 2
-        ty = sy + i * lh
-        # 그림자
-        draw.text((tx+4, ty+4), line, font=tf, fill=(0, 0, 0))
-        # 본문
-        draw_text_with_outline(draw, tx, ty, line, tf,
-                               color=(255, 255, 255),
-                               outline_color=(80, 50, 160), outline_w=3)
+        for i, line in enumerate(lines):
+            tw = draw.textbbox((0,0), line, font=tf)[2]
+            tx = (TARGET_W - tw) // 2
+            ty = sy + i * lh
+            draw.text((tx+4, ty+4), line, font=tf, fill=(0, 0, 0))
+            draw_text_with_outline(draw, tx, ty, line, tf,
+                                   color=(255, 255, 255),
+                                   outline_color=(80, 50, 160), outline_w=3)
 
-    # 하단 구독 유도
-    sub_font = get_font(40)
-    sub_text = "👆 구독하고 다음 영상도 확인하세요"
-    sw = draw.textbbox((0,0), sub_text, font=sub_font)[2]
-    draw.text(((TARGET_W-sw)//2, TARGET_H - 220), sub_text,
-              font=sub_font, fill=(180, 160, 220))
+        # 하단 구독 유도
+        sub_font = get_font(40)
+        sub_text = "👆 구독하고 다음 영상도 확인하세요"
+        sw = draw.textbbox((0,0), sub_text, font=sub_font)[2]
+        draw.text(((TARGET_W-sw)//2, TARGET_H - 220), sub_text,
+                  font=sub_font, fill=(180, 160, 220))
 
-    # @wisslist
-    wf   = get_font(38)
-    wt   = "@wisslist"
-    ww   = draw.textbbox((0,0), wt, font=wf)[2]
-    draw.text(((TARGET_W-ww)//2, TARGET_H - 140), wt,
-              font=wf, fill=(130, 110, 200))
+        # @wisslist
+        wf   = get_font(38)
+        wt   = "@wisslist"
+        ww   = draw.textbbox((0,0), wt, font=wf)[2]
+        draw.text(((TARGET_W-ww)//2, TARGET_H - 140), wt,
+                  font=wf, fill=(130, 110, 200))
 
-    img.save(str(card), "PNG")
+        img.save(str(card), "PNG")
 
     cmd = ["ffmpeg", "-y",
            "-loop", "1", "-i", str(card),
