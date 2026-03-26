@@ -118,21 +118,37 @@ def run(product_name: str = None):
             if product_name:
                 # 제품 이미지 태그로 업데이트
                 new_tags = _build_product_tags(product_name)
-                item["all_tags"]  = list(set(item["all_tags"]) | set(new_tags))
-                item["category"]  = "product"
-                item["query"]     = product_name
+                item["all_tags"] = list(set(item["all_tags"]) | set(new_tags))
+                item["category"] = "product"
+                item["query"]    = product_name
 
-                # 파일이 product 폴더에 없으면 이동
-                if existing_path.parent != PRODUCT_DIR and existing_path.exists():
-                    new_path = PRODUCT_DIR / f.name
-                    shutil.move(str(existing_path), str(new_path))
-                    item["file"] = str(new_path)
-                    print(f"  🔄 이동+태그 업데이트: {f.name}")
+                new_path = PRODUCT_DIR / f.name
+                # 이미 product 폴더에 있으면 이동 불필요
+                if existing_path.resolve() == new_path.resolve():
+                    print(f"  🔄 태그만 업데이트 (이미 product 폴더): {f.name}")
                 else:
-                    print(f"  🔄 태그 업데이트: {f.name}  [{', '.join(new_tags[:3])}...]")
+                    # 이동할 소스 결정: library 경로 우선, 없으면 import_here 파일 사용
+                    if existing_path.exists():
+                        src = existing_path
+                    elif f.exists():
+                        src = f
+                    else:
+                        print(f"  ⚠️  파일을 찾을 수 없음: {f.name} → 태그만 업데이트")
+                        updated += 1
+                        if f.exists():
+                            f.unlink()
+                        continue
+
+                    # product 폴더로 이동
+                    new_path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(src), str(new_path))
+                    item["file"] = str(new_path)
+                    print(f"  🔄 product 폴더로 이동+태그 업데이트: {f.name}")
+                    print(f"     저장 위치: {new_path}")
+
                 updated += 1
 
-                # import_here에 남아있으면 삭제
+                # import_here에 원본이 남아있으면 삭제
                 if f.exists():
                     f.unlink()
             else:
