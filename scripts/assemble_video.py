@@ -19,6 +19,12 @@ sys.path.insert(0, str(Path(__file__).parent))
 from config import BASE_DIR
 from library import load_library
 
+# 커스텀 배경/엔딩 이미지 설정 읽기
+try:
+    from config import CUSTOM_BG_PATH, CUSTOM_ENDING_PATH
+except ImportError:
+    CUSTOM_BG_PATH, CUSTOM_ENDING_PATH = None, None
+
 BASE        = Path(BASE_DIR)
 SCRIPT_PATH = BASE / "scripts_json" / "today_script.json"
 AUDIO_DIR   = BASE / "audio"
@@ -334,11 +340,14 @@ def make_segment_clip(media_path, audio_path: str,
                       duration: float,
                       out_path: Path, idx: int) -> bool:
 
-    bg_png   = TMP_DIR / f"bg_{idx:02d}.png"
+    bg_png    = TMP_DIR / f"bg_{idx:02d}.png"
     media_mp4 = TMP_DIR / f"media_{idx:02d}.mp4"
 
-    # 1. 배경 PNG 생성 (PIL)
-    make_bg_frame(title, narration, bg_png)
+    # 1. 배경 PNG 생성 (커스텀 이미지 우선, 없으면 자동 생성)
+    if CUSTOM_BG_PATH and Path(CUSTOM_BG_PATH).exists():
+        _overlay_text_on_custom_bg(CUSTOM_BG_PATH, title, narration, bg_png)
+    else:
+        make_bg_frame(title, narration, bg_png)
 
     # 2. 배경 PNG → 고정 프레임 영상 (오디오 포함, -r 30 강제)
     bg_vid = TMP_DIR / f"bg_vid_{idx:02d}.mp4"
@@ -425,15 +434,22 @@ def make_segment_clip(media_path, audio_path: str,
 # ══════════════════════════════════════════════════════════════════
 def make_ending_clip(title: str, out_path: Path, duration: float = 2.0) -> bool:
     """
-    고품질 엔딩 카드 (v2)
-    - 그라데이션 배경
-    - 채널 로고 영역
-    - 굵은 제목 + 그림자
-    - 하단 구독 유도 문구
+    엔딩 카드 생성.
+    CUSTOM_ENDING_PATH 있으면 커스텀 이미지 사용 (제목 텍스트만 오버레이).
+    없으면 자동 생성.
     """
     card = TMP_DIR / "ending.png"
-    img  = Image.new("RGB", (TARGET_W, TARGET_H), (12, 10, 20))
-    draw = ImageDraw.Draw(img)
+
+    if CUSTOM_ENDING_PATH and Path(CUSTOM_ENDING_PATH).exists():
+        # 커스텀 엔딩 위에 제목만 오버레이
+        _overlay_text_on_custom_bg(
+            CUSTOM_ENDING_PATH, title, "", card,
+            title_only=True
+        )
+    else:
+        # ── 자동 생성 엔딩 카드 ────────────────────────────────────
+        img  = Image.new("RGB", (TARGET_W, TARGET_H), (12, 10, 20))
+        draw = ImageDraw.Draw(img)
 
     # 배경 그라데이션 (위: 진한 네이비 → 아래: 짙은 보라)
     for y in range(TARGET_H):
@@ -519,8 +535,69 @@ def make_ending_clip(title: str, out_path: Path, duration: float = 2.0) -> bool:
 
 
 # ══════════════════════════════════════════════════════════════════
-# concat + 배속 + BGM
+# 커스텀 배경 위에 텍스트만 오버레이 (핵심 함수)
 # ══════════════════════════════════════════════════════════════════
+def _overlay_text_on_custom_bg(bg_path: str, title: str, narration: str,
+                                out_path: Path, title_only: bool = False):
+    """
+    커스텀 배경 이미지(1080x1920) 위에 제목+자막만 PIL로 오버레이.
+    미디어 박스 영역(BOX_X, BOX_Y, BOX_W, BOX_H)은 투명하게 비워둠.
+
+    bg_path:    사용자가 직접 만든 배경 PNG/JPG (1080x1920 권장)
+    title:      상단에 표시할 제목 텍스트
+    narration:  하단에 표시할 자막 텍스트
+    title_only: True면 자막 없이 제목만 (엔딩 카드용)
+    """
+    # 배경 이미지 로드 + 1080x1920으로 리사이즈
+    bg = Image.open(bg_path).convert("RGB")
+    if bg.size != (TARGET_W, TARGET_H):
+        bg = bg.resize((TARGET_W, TARGET_H), Image.LANCZOS)
+
+    draw = ImageDraw.Draw(bg)
+
+    # ── 상단 제목 영역 (헤더 바 없이 텍스트만) ──────────────────────
+    title_font = get_font(54)
+    header_h   = int(TARGET_H * 0.18)
+    t_lines    = wrap_text(draw, title, title_font, TARGET_W - 80)
+    lh         = draw.textbbox((0,0), "가", font=title_font)[3] + 16
+    t_total    = lh * len(t_lines)
+    t_y        = (header_h - t_total) // 2 + 10
+
+    for i, line in enumerate(t_lines):
+        tw = draw.textbbox((0,0), line, font=title_font)[2]
+        tx = (TARGET_W - tw) // 2
+        ty = t_y + i * lh
+        draw_text_with_outline(draw, tx, ty, line, title_font,
+                               color=(255, 255, 255),
+                               outline_color=(0, 0, 0), outline_w=4)
+
+    # ── 하단 자막 (title_only=False 일 때만) ─────────────────────────
+    if not title_only and narration.strip():
+        sub_font   = get_font(48)
+        by2        = BOX_Y + BOX_H
+        sub_lines  = wrap_text(draw, narration, sub_font, TARGET_W - 100)
+        slh        = draw.textbbox((0,0), "가", font=sub_font)[3] + 16
+        sub_total  = slh * len(sub_lines)
+        sub_panel_y = by2 + 40
+        sub_panel_h = TARGET_H - sub_panel_y - 30
+
+        # 반투명 자막 패널
+        panel     = Image.new("RGBA", (TARGET_W - 60, sub_panel_h), (0, 0, 0, 170))
+        bg_rgba   = bg.convert("RGBA")
+        bg_rgba.paste(panel, (30, sub_panel_y), panel)
+        bg = bg_rgba.convert("RGB")
+        draw = ImageDraw.Draw(bg)
+
+        sy = sub_panel_y + (sub_panel_h - sub_total) // 2
+        for i, line in enumerate(sub_lines):
+            tw = draw.textbbox((0,0), line, font=sub_font)[2]
+            tx = (TARGET_W - tw) // 2
+            ty = sy + i * slh
+            draw_text_with_outline(draw, tx, ty, line, sub_font,
+                                   color=(255, 255, 255),
+                                   outline_color=(0, 0, 0), outline_w=3)
+
+    bg.save(str(out_path), "PNG")
 def concat_clips(clip_paths: list, out_path: Path) -> bool:
     list_file = TMP_DIR / "concat_list.txt"
     with open(list_file, "w", encoding="utf-8") as f:
