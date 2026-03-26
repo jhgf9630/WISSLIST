@@ -304,25 +304,12 @@ def make_bg_frame(title: str, narration: str, out_path: Path):
     draw.rectangle([bx1-3, by1-3, bx2+3, by2+3],
                    outline=(70, 65, 60), width=6)
 
-    # ── 자막 패널 (반투명 박스 + 텍스트) ──────────────────────────
-    sub_panel_y = by2 + 40
+    # ── 자막 텍스트 (패널 배경 없이 텍스트만) ─────────────────────
+    sub_panel_y = by2 + 50
     sub_panel_h = TARGET_H - sub_panel_y - 30
 
-    # 반투명 패널
-    panel = Image.new("RGBA", (TARGET_W - 60, sub_panel_h), (30, 28, 25, 210))
-    img_rgba = img.convert("RGBA")
-    img_rgba.paste(panel, (30, sub_panel_y), panel)
-    img = img_rgba.convert("RGB")
-    draw = ImageDraw.Draw(img)
-
-    # 패널 테두리
-    draw.rectangle([30, sub_panel_y, TARGET_W-30,
-                    sub_panel_y + sub_panel_h],
-                   outline=(100, 95, 90), width=2)
-
-    # 자막 텍스트
     sub_font  = get_font(48)
-    sub_lines = wrap_text(draw, narration, sub_font, TARGET_W - 120)
+    sub_lines = wrap_text(draw, narration, sub_font, TARGET_W - 80)
     slh       = draw.textbbox((0,0), "가", font=sub_font)[3] + 18
     s_total   = slh * len(sub_lines)
     sy        = sub_panel_y + (sub_panel_h - s_total) // 2
@@ -343,10 +330,47 @@ def make_bg_frame(title: str, narration: str, out_path: Path):
 # 미디어 매칭 (GIF 우선)
 # ══════════════════════════════════════════════════════════════════
 def find_best_media(visual_tags: list, exclude_files: set = None,
-                    prefer_gif: bool = True):
+                    prefer_gif: bool = True, product_name: str = None):
+    """
+    태그 기반 미디어 매칭.
+
+    product_name 지정 시:
+      - visual_tag에 "제품이미지" 포함 → product_name 태그가 있는 파일만 우선 탐색
+      - 없으면 일반 태그 매칭으로 폴백
+    이 방식으로 안성탕면 영상 만들 때 불닭볶음면 이미지가 나오는 문제 방지.
+    """
     if exclude_files is None:
         exclude_files = set()
+
     library = load_library()
+
+    # ── 제품 이미지 우선 매칭 ────────────────────────────────────────
+    # visual_tag에 "제품이미지" 포함 + product_name 있을 때만 동작
+    is_product_seg = "제품이미지" in visual_tags
+    if is_product_seg and product_name:
+        product_pool = []
+        for item in library:
+            if item["file"] in exclude_files:
+                continue
+            if not Path(item["file"]).exists():
+                continue
+            tags = set(item["all_tags"])
+            # 제품명 태그가 정확히 매칭되는 파일만
+            if product_name in tags or product_name.replace(" ", "") in tags:
+                score = len(set(visual_tags) & tags) + 10  # 보너스 점수
+                product_pool.append((score, item))
+
+        if product_pool:
+            max_score   = max(s for s, _ in product_pool)
+            top_matches = [item for s, item in product_pool if s == max_score]
+            chosen      = random.choice(top_matches)
+            print(f"  🎯 [제품] {Path(chosen['file']).name}  (제품명 매칭: {product_name})")
+            return chosen
+        else:
+            print(f"  ⚠️  '{product_name}' 제품 이미지 없음 → 일반 태그 매칭으로 폴백")
+            print(f"     import_custom.py --product '{product_name}' 로 등록하세요")
+
+    # ── 일반 태그 매칭 ────────────────────────────────────────────────
     scored_gif, scored_other = [], []
     for item in library:
         if item["file"] in exclude_files:
@@ -639,18 +663,11 @@ def _overlay_text_on_custom_bg(bg_path: str, title: str, narration: str,
     if not title_only and narration.strip():
         sub_font   = get_font(48)
         by2        = BOX_Y + BOX_H
-        sub_lines  = wrap_text(draw, narration, sub_font, TARGET_W - 100)
+        sub_lines  = wrap_text(draw, narration, sub_font, TARGET_W - 80)
         slh        = draw.textbbox((0,0), "가", font=sub_font)[3] + 16
         sub_total  = slh * len(sub_lines)
-        sub_panel_y = by2 + 40
+        sub_panel_y = by2 + 50
         sub_panel_h = TARGET_H - sub_panel_y - 30
-
-        # 반투명 자막 패널
-        panel     = Image.new("RGBA", (TARGET_W - 60, sub_panel_h), (0, 0, 0, 170))
-        bg_rgba   = bg.convert("RGBA")
-        bg_rgba.paste(panel, (30, sub_panel_y), panel)
-        bg = bg_rgba.convert("RGB")
-        draw = ImageDraw.Draw(bg)
 
         sy = sub_panel_y + (sub_panel_h - sub_total) // 2
         for i, line in enumerate(sub_lines):
@@ -735,10 +752,13 @@ def assemble(script_path=None):
     for d in [AUDIO_DIR, OUTPUT_DIR, BGM_DIR, TMP_DIR]:
         d.mkdir(exist_ok=True)
 
-    title    = script.get("title", "WISSLIST")
-    segments = script["segments"]
+    title        = script.get("title", "WISSLIST")
+    product_name = script.get("product_name", "")   # generate_script.py가 자동 기입
+    segments     = script["segments"]
 
     print(f"\n🎬 조립 시작: {title}")
+    if product_name:
+        print(f"   제품명: {product_name}  (제품 이미지 우선 매칭 활성)")
     print("=" * 55)
 
     # ── 1. TTS ────────────────────────────────────────────────────
@@ -760,7 +780,9 @@ def assemble(script_path=None):
         narr = seg["narration"]
         print(f"\n  Seg {i+1} | {dur:.2f}초 | {tags}")
 
-        media      = find_best_media(tags, exclude_files=used, prefer_gif=True)
+        media      = find_best_media(tags, exclude_files=used,
+                                     prefer_gif=True,
+                                     product_name=product_name)
         media_file = None
         if media and Path(media["file"]).exists():
             used.add(media["file"])
