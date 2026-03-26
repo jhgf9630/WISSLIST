@@ -1,12 +1,12 @@
 # =============================================
-# WISSLIST - 영상 자동 조립 v12
+# WISSLIST - 영상 자동 조립 v13
 # 실행: python D:\WISSLIST\scripts\assemble_video.py
 #
-# v12 핵심 변경:
-#  - drawtext 필터 완전 제거 (버전 호환 문제)
-#  - PIL로 자막 PNG 생성 → ffmpeg overlay 합성
-#    (이스케이프 문제 없음, 한국어 완벽 지원)
-#  - 2단계: raw clip 생성 → subtitle overlay
+# v13 수정:
+#  1. 자막: on_screen_text → narration 전체 텍스트로 교체
+#  2. 타이밍: 오디오 실제 길이로 클립 길이 정확히 맞춤
+#  3. 엔딩: 쇼츠용 제목+배경 엔딩 카드 추가 (3초)
+#     - 레퍼런스: 볼드 한국어 텍스트, 단색/그라데이션 배경
 # =============================================
 
 import json
@@ -30,16 +30,15 @@ BGM_DIR     = BASE / "bgm"
 
 TARGET_W, TARGET_H = 1080, 1920
 
-# 한국어 폰트 경로 목록 (순서대로 시도)
 FONT_CANDIDATES = [
-    r"C:\Windows\Fonts\malgun.ttf",    # 맑은 고딕
-    r"C:\Windows\Fonts\malgunbd.ttf",  # 맑은 고딕 Bold
-    r"C:\Windows\Fonts\gulim.ttc",     # 굴림
-    r"C:\Windows\Fonts\arial.ttf",     # 폴백
+    r"C:\Windows\Fonts\malgunbd.ttf",  # 맑은 고딕 Bold (레퍼런스와 유사)
+    r"C:\Windows\Fonts\malgun.ttf",
+    r"C:\Windows\Fonts\gulim.ttc",
+    r"C:\Windows\Fonts\arial.ttf",
 ]
 
 
-def get_font(size: int = 55):
+def get_font(size: int):
     for fp in FONT_CANDIDATES:
         if Path(fp).exists():
             try:
@@ -54,12 +53,8 @@ def get_font(size: int = 55):
 # ══════════════════════════════════════════════════════════════════
 def run_cmd(cmd: list, timeout: int = 120) -> tuple:
     try:
-        r = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=timeout,
-        )
+        r = subprocess.run(cmd, stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, timeout=timeout)
         stdout = r.stdout.decode("utf-8", errors="replace") if r.stdout else ""
         stderr = r.stderr.decode("utf-8", errors="replace") if r.stderr else ""
         return r.returncode, stdout, stderr
@@ -98,8 +93,7 @@ def get_audio_duration(path: str) -> float:
     _, out, _ = run_cmd([
         "ffprobe", "-v", "error",
         "-show_entries", "format=duration",
-        "-of", "default=noprint_wrappers=1:nokey=1",
-        str(path),
+        "-of", "default=noprint_wrappers=1:nokey=1", str(path),
     ], timeout=15)
     try:
         return float(out.strip())
@@ -109,38 +103,119 @@ def get_audio_duration(path: str) -> float:
 
 # ══════════════════════════════════════════════════════════════════
 # PIL 자막 PNG 생성
-# drawtext 대신 PIL로 자막 이미지 생성 → 이스케이프 문제 없음
 # ══════════════════════════════════════════════════════════════════
+def wrap_text(text: str, font, max_width: int, draw) -> list:
+    """텍스트를 max_width에 맞게 자동 줄바꿈"""
+    words  = text.split()
+    lines  = []
+    line   = ""
+    for word in words:
+        test = (line + " " + word).strip()
+        bbox = draw.textbbox((0, 0), test, font=font)
+        if bbox[2] - bbox[0] <= max_width:
+            line = test
+        else:
+            if line:
+                lines.append(line)
+            line = word
+    if line:
+        lines.append(line)
+    return lines
+
+
 def make_subtitle_png(text: str, out_path: Path,
-                      font_size: int = 55,
+                      font_size: int = 52,
                       width: int = TARGET_W,
                       height: int = TARGET_H):
     """
-    자막 텍스트를 PNG로 렌더링.
-    배경 투명, 흰 글자 + 검정 외곽선.
-    하단 73% 위치에 배치.
+    자막 전체 텍스트를 PNG로 렌더링.
+    - 자동 줄바꿈
+    - 볼드 폰트 + 검정 외곽선
+    - 화면 하단 70% 위치
     """
     img  = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     font = get_font(font_size)
 
-    # 텍스트 크기 계산
-    bbox = draw.textbbox((0, 0), text, font=font)
-    tw   = bbox[2] - bbox[0]
-    th   = bbox[3] - bbox[1]
+    max_w = int(width * 0.88)
+    lines = wrap_text(text, font, max_w, draw)
 
-    x = (width - tw) // 2
-    y = int(height * 0.73)
+    # 줄 높이 계산
+    line_h = draw.textbbox((0, 0), "가나다", font=font)[3] + 12
+    total_h = line_h * len(lines)
+    y_start = int(height * 0.70) - total_h // 2
 
-    # 외곽선 (검정 8방향)
-    for dx in [-3, -2, -1, 0, 1, 2, 3]:
-        for dy in [-3, -2, -1, 0, 1, 2, 3]:
-            if dx == 0 and dy == 0:
-                continue
-            draw.text((x + dx, y + dy), text, font=font, fill=(0, 0, 0, 255))
+    for i, line in enumerate(lines):
+        bbox = draw.textbbox((0, 0), line, font=font)
+        tw   = bbox[2] - bbox[0]
+        x    = (width - tw) // 2
+        y    = y_start + i * line_h
 
-    # 본문 (흰색)
-    draw.text((x, y), text, font=font, fill=(255, 255, 255, 255))
+        # 외곽선
+        for dx in range(-3, 4):
+            for dy in range(-3, 4):
+                if dx == 0 and dy == 0:
+                    continue
+                draw.text((x + dx, y + dy), line, font=font,
+                          fill=(0, 0, 0, 255))
+        # 본문
+        draw.text((x, y), line, font=font, fill=(255, 255, 255, 255))
+
+    img.save(str(out_path), "PNG")
+
+
+# ══════════════════════════════════════════════════════════════════
+# 엔딩 카드 이미지 생성 (쇼츠용)
+# 레퍼런스: 굵은 제목 텍스트 + 단색 배경
+# ══════════════════════════════════════════════════════════════════
+def make_ending_card(title: str, out_path: Path,
+                     width: int = TARGET_W,
+                     height: int = TARGET_H):
+    """
+    쇼츠 엔딩 카드:
+    - 어두운 배경 (네이비/차콜)
+    - 중앙에 큰 제목 텍스트
+    - 하단에 채널명 '@wisslist'
+    """
+    # 배경: 어두운 네이비
+    img  = Image.new("RGB", (width, height), (18, 18, 30))
+    draw = ImageDraw.Draw(img)
+
+    # 상단 컬러 바 (포인트)
+    for y in range(12):
+        alpha = int(255 * (1 - y / 12))
+        draw.rectangle([0, y, width, y + 1], fill=(120, 80, 255))
+
+    # 제목 폰트 (큰 사이즈)
+    title_font   = get_font(72)
+    channel_font = get_font(42)
+
+    # 제목 자동 줄바꿈
+    max_w = int(width * 0.85)
+    lines = wrap_text(title, title_font, max_w, draw)
+    line_h = draw.textbbox((0, 0), "가나다", font=title_font)[3] + 20
+    total_h = line_h * len(lines)
+    y_start = height // 2 - total_h // 2 - 40
+
+    for i, line in enumerate(lines):
+        bbox = draw.textbbox((0, 0), line, font=title_font)
+        tw   = bbox[2] - bbox[0]
+        x    = (width - tw) // 2
+        y    = y_start + i * line_h
+        # 그림자
+        draw.text((x + 4, y + 4), line, font=title_font,
+                  fill=(0, 0, 0, 180))
+        # 본문 (밝은 흰색)
+        draw.text((x, y), line, font=title_font,
+                  fill=(255, 255, 255))
+
+    # 채널명
+    ch_text = "@wisslist"
+    bbox    = draw.textbbox((0, 0), ch_text, font=channel_font)
+    tw      = bbox[2] - bbox[0]
+    cx      = (width - tw) // 2
+    draw.text((cx, height - 180), ch_text, font=channel_font,
+              fill=(160, 140, 255))
 
     img.save(str(out_path), "PNG")
 
@@ -204,7 +279,7 @@ def _fallback_pexels(query: str):
 
 
 # ══════════════════════════════════════════════════════════════════
-# STEP A: raw clip (자막 없음) — 단순 ffmpeg, 안정적
+# STEP A: raw clip (오디오 길이 정확히 -t 적용)
 # ══════════════════════════════════════════════════════════════════
 def make_raw_clip(media_path, audio_path: str,
                   duration: float, out_path: Path) -> bool:
@@ -214,14 +289,14 @@ def make_raw_clip(media_path, audio_path: str,
         f"scale={TARGET_W}:{TARGET_H}"
         f":force_original_aspect_ratio=decrease"
         f",pad={TARGET_W}:{TARGET_H}"
-        f":(ow-iw)/2:(oh-ih)/2"
-        f":black"
+        f":(ow-iw)/2:(oh-ih)/2:black"
     )
 
+    # -t duration 으로 오디오/영상 동시에 정확히 자름
     common_out = [
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
         "-c:a", "aac", "-b:a", "128k",
-        "-t", f"{duration:.3f}",
+        "-t", f"{duration:.3f}",          # ← 핵심: 오디오 길이 기준으로 자름
         "-pix_fmt", "yuv420p",
         str(out_path),
     ]
@@ -230,23 +305,19 @@ def make_raw_clip(media_path, audio_path: str,
         cmd = (["ffmpeg", "-y",
                 "-f", "lavfi",
                 "-i", f"color=black:s={TARGET_W}x{TARGET_H}:d={duration:.3f}",
-                "-i", audio_path,
-                "-vf", "null"]
-               + common_out)
+                "-i", audio_path, "-vf", "null"] + common_out)
 
     elif ext in (".jpg", ".jpeg", ".png", ".webp"):
         cmd = (["ffmpeg", "-y",
                 "-loop", "1", "-i", media_path,
                 "-i", audio_path,
-                "-vf", scale_pad]
-               + common_out)
+                "-vf", scale_pad] + common_out)
 
     else:  # gif / mp4
         cmd = (["ffmpeg", "-y",
                 "-stream_loop", "-1", "-i", media_path,
                 "-i", audio_path,
-                "-vf", scale_pad]
-               + common_out)
+                "-vf", scale_pad] + common_out)
 
     code, _, err = run_cmd(cmd, timeout=60)
     if code != 0:
@@ -256,31 +327,20 @@ def make_raw_clip(media_path, audio_path: str,
 
 
 # ══════════════════════════════════════════════════════════════════
-# STEP B: 자막 PNG overlay — PIL + ffmpeg overlay 필터
+# STEP B: 자막 overlay
 # ══════════════════════════════════════════════════════════════════
 def overlay_subtitle(raw_path: Path, subtitle_png: Path,
                      out_path: Path) -> bool:
-    """
-    raw clip 위에 자막 PNG를 overlay.
-    overlay 필터는 복잡한 이스케이프 없이 경로만 전달.
-    """
-    # PNG 경로: 역슬래시 → 슬래시 (ffmpeg 호환)
     png_path = str(subtitle_png).replace("\\", "/")
-
-    cmd = [
-        "ffmpeg", "-y",
-        "-i", str(raw_path),
-        "-i", png_path,
-        "-filter_complex", "overlay=0:0",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-        "-c:a", "copy",
-        "-pix_fmt", "yuv420p",
-        str(out_path),
-    ]
+    cmd = ["ffmpeg", "-y",
+           "-i", str(raw_path), "-i", png_path,
+           "-filter_complex", "overlay=0:0",
+           "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+           "-c:a", "copy", "-pix_fmt", "yuv420p",
+           str(out_path)]
     code, _, err = run_cmd(cmd, timeout=60)
     if code != 0:
-        print(f"    ⚠️  subtitle overlay 실패:\n{err[-300:]}")
-        # 실패 시 자막 없는 버전을 그냥 사용
+        print(f"    ⚠️  overlay 실패 → 자막 없이 계속\n{err[-200:]}")
         shutil.copy(str(raw_path), str(out_path))
     return True
 
@@ -288,21 +348,41 @@ def overlay_subtitle(raw_path: Path, subtitle_png: Path,
 def make_segment_clip(media_path, audio_path: str,
                       subtitle: str, duration: float,
                       out_path: Path, idx: int) -> bool:
-
     raw_path = TMP_DIR / f"raw_{idx:02d}.mp4"
     sub_png  = TMP_DIR / f"sub_{idx:02d}.png"
 
-    # 1. raw clip 생성
     if not make_raw_clip(media_path, audio_path, duration, raw_path):
         return False
 
-    # 2. 자막 PNG 생성 (PIL)
     if subtitle.strip():
         make_subtitle_png(subtitle, sub_png)
         overlay_subtitle(raw_path, sub_png, out_path)
     else:
         shutil.copy(str(raw_path), str(out_path))
 
+    return out_path.exists()
+
+
+# ══════════════════════════════════════════════════════════════════
+# 엔딩 카드 클립 생성 (무음 3초)
+# ══════════════════════════════════════════════════════════════════
+def make_ending_clip(title: str, out_path: Path,
+                     duration: float = 3.0) -> bool:
+    card_img = TMP_DIR / "ending_card.png"
+    make_ending_card(title, card_img)
+
+    cmd = ["ffmpeg", "-y",
+           "-loop", "1", "-i", str(card_img),
+           "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
+           "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+           "-c:a", "aac", "-b:a", "128k",
+           "-t", f"{duration:.1f}",
+           "-pix_fmt", "yuv420p",
+           str(out_path)]
+    code, _, err = run_cmd(cmd, timeout=30)
+    if code != 0:
+        print(f"  ⚠️  엔딩 카드 생성 실패:\n{err[-300:]}")
+        return False
     return True
 
 
@@ -346,12 +426,9 @@ def add_bgm(video_path: Path, out_path: Path, bgm_volume: float = 0.15) -> bool:
     bgm = random.choice(bgm_files)
     print(f"  🎵 BGM: {bgm.name}")
     dur = get_audio_duration(str(video_path))
-    af  = (
-        f"[1:a]aloop=loop=-1:size=2000000000,"
-        f"atrim=0:{dur:.3f},"
-        f"volume={bgm_volume}[bgm];"
-        f"[0:a][bgm]amix=inputs=2:duration=first:dropout_transition=3[aout]"
-    )
+    af  = (f"[1:a]aloop=loop=-1:size=2000000000,"
+           f"atrim=0:{dur:.3f},volume={bgm_volume}[bgm];"
+           f"[0:a][bgm]amix=inputs=2:duration=first:dropout_transition=3[aout]")
     cmd = ["ffmpeg", "-y",
            "-i", str(video_path), "-i", str(bgm),
            "-filter_complex", af,
@@ -388,9 +465,10 @@ def assemble(script_path=None):
     print(f"\n🎬 조립 시작: {script['title']}")
     print("=" * 55)
     segments = script["segments"]
+    title    = script.get("title", "WISSLIST")
 
     # ── 1. TTS ────────────────────────────────────────────────────
-    print("\n[1/5] 나레이션 생성 중...")
+    print("\n[1/6] 나레이션 생성 중...")
     for i, seg in enumerate(segments):
         ap = AUDIO_DIR / f"seg_{i:02d}.mp3"
         make_tts(seg["narration"], ap)
@@ -399,13 +477,14 @@ def assemble(script_path=None):
         print(f"       → {seg['audio_duration']:.2f}초")
 
     # ── 2. 세그먼트 클립 ──────────────────────────────────────────
-    print("\n[2/5] 세그먼트 클립 생성 중...")
+    print("\n[2/6] 세그먼트 클립 생성 중...")
     used, clip_paths = set(), []
 
     for i, seg in enumerate(segments):
         dur   = seg["audio_duration"]
         tags  = seg["visual_tag"]
-        sub   = seg["on_screen_text"]
+        # ✅ 수정 1: narration 전체를 자막으로 사용
+        sub   = seg["narration"]
         print(f"\n  Seg {i+1} | {dur:.2f}초 | {tags}")
 
         media      = find_best_media(tags, exclude_files=used, prefer_gif=True)
@@ -427,24 +506,31 @@ def assemble(script_path=None):
         print("❌ 생성된 클립 없음")
         return None
 
-    # ── 3. concat ─────────────────────────────────────────────────
-    print("\n[3/5] 클립 합치는 중...")
+    # ── 3. 엔딩 카드 추가 ──────────────────────────────────────────
+    print("\n[3/6] 엔딩 카드 생성 중...")
+    ending_out = TMP_DIR / "clip_ending.mp4"
+    if make_ending_clip(title, ending_out, duration=3.0):
+        clip_paths.append(ending_out)
+        print("  ✅ 엔딩 카드 추가")
+
+    # ── 4. concat ─────────────────────────────────────────────────
+    print("\n[4/6] 클립 합치는 중...")
     concat_out = TMP_DIR / "concat_raw.mp4"
     if not concat_clips(clip_paths, concat_out):
         return None
     print("  ✅ concat 완료")
 
-    # ── 4. 1.5배속 ────────────────────────────────────────────────
-    print("\n[4/5] 1.5배속 적용 중...")
+    # ── 5. 1.5배속 ────────────────────────────────────────────────
+    print("\n[5/6] 1.5배속 적용 중...")
     speed_out = TMP_DIR / "speed_1.5x.mp4"
     if not apply_speed(concat_out, speed_out, speed=1.5):
         speed_out = concat_out
     else:
         print("  ✅ 1.5배속 완료")
 
-    # ── 5. BGM + 최종 저장 ────────────────────────────────────────
-    print("\n[5/5] BGM 믹싱 + 최종 저장 중...")
-    safe  = "".join(c for c in script["title"][:20]
+    # ── 6. BGM + 최종 저장 ────────────────────────────────────────
+    print("\n[6/6] BGM 믹싱 + 최종 저장 중...")
+    safe  = "".join(c for c in title[:20]
                     if c.isalnum() or c in " _-").strip()
     final = OUTPUT_DIR / f"{safe}.mp4"
     add_bgm(speed_out, final)
@@ -454,7 +540,7 @@ def assemble(script_path=None):
     total_raw = sum(s["audio_duration"] for s in segments)
     total_out = total_raw / 1.5
     print(f"\n✅ 완성: {final}")
-    print(f"   원본: {total_raw:.1f}초 → 1.5배속 후: {total_out:.1f}초")
+    print(f"   원본: {total_raw:.1f}초 → 1.5배속 후: {total_out:.1f}초 (+엔딩 2초)")
     print(f"\n📋 설명란:\n{script.get('description_cta','')}")
     print(f"\n⚠️  {script.get('disclaimer','')}")
     return str(final)
