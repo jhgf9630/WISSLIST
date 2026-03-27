@@ -159,6 +159,12 @@ KO_VOICES = [
     "ko-KR-SeoHyeonNeural", # 명랑한 여성
     "ko-KR-YuJinNeural",    # 자연스러운 여성
 ]
+
+
+# ══════════════════════════════════════════════════════════════════
+# TTS
+# ══════════════════════════════════════════════════════════════════
+def make_tts(text: str, out_path: Path, voice: str = "ko-KR-SunHiNeural"):
     """
     edge-tts로 TTS 생성.
     - 텍스트를 UTF-8 파일로 저장 후 --file 옵션으로 전달 (인코딩 문제 방지)
