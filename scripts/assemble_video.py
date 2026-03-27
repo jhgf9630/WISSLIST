@@ -147,17 +147,11 @@ def get_audio_duration(path: str) -> float:
         return 2.0
 
 
-# ── 한국어 TTS 목소리 목록 ───────────────────────────────────────
-# edge-tts 지원 한국어 목소리
+# ── 한국어 TTS 목소리 목록 (동작 확인된 목소리만) ─────────────────
 KO_VOICES = [
     "ko-KR-SunHiNeural",    # 밝고 친근한 여성 (기본)
     "ko-KR-InJoonNeural",   # 차분한 남성
     "ko-KR-HyunsuNeural",   # 활기찬 남성
-    "ko-KR-BongJinNeural",  # 중간 톤 남성
-    "ko-KR-GookMinNeural",  # 젊은 남성
-    "ko-KR-JiMinNeural",    # 젊은 여성
-    "ko-KR-SeoHyeonNeural", # 명랑한 여성
-    "ko-KR-YuJinNeural",    # 자연스러운 여성
 ]
 
 
@@ -354,17 +348,29 @@ def make_subtitle_png(text: str, out_path: Path):
 # ══════════════════════════════════════════════════════════════════
 def split_narration(text: str) -> tuple:
     """
-    narration을 단어 기준 절반으로 나눔.
-    앞 절반 → 첫 번째 자막, 뒷 절반 → 두 번째 자막.
-    단어가 1개면 동일 텍스트 반환.
+    나레이션을 두 파트로 분할.
+    1순위: 마침표(./!/?) 기준 — 자연스러운 문장 경계
+    2순위: 단어 기준 절반 분할 (마침표 없을 때)
     """
+    # 마침표/느낌표/물음표 뒤 공백 기준으로 분할
+    import re
+    # 문장 끝 구두점 + 공백 패턴 찾기
+    matches = list(re.finditer(r'[.!?。]\s+', text))
+    if matches:
+        # 가장 중간에 가까운 구두점 위치를 분할 기준으로 선택
+        mid = len(text) / 2
+        best = min(matches, key=lambda m: abs(m.end() - mid))
+        first  = text[:best.end()].strip()
+        second = text[best.end():].strip()
+        if first and second:
+            return first, second
+
+    # 구두점 없으면 단어 기준 절반 분할
     words = text.split()
     if len(words) <= 1:
         return text, text
     mid   = max(1, len(words) // 2)
-    first = " ".join(words[:mid])
-    second= " ".join(words[mid:])
-    return first, second
+    return " ".join(words[:mid]), " ".join(words[mid:])
 
 
 # ══════════════════════════════════════════════════════════════════
