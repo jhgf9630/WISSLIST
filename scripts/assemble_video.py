@@ -793,20 +793,32 @@ def apply_speed(in_path: Path, out_path: Path, speed: float = 1.5) -> bool:
 
 
 def add_bgm(video_path: Path, out_path: Path, bgm_volume: float = 0.15) -> bool:
+    # 실제 영상 길이 먼저 측정
+    dur = get_audio_duration(str(video_path))
+
     bgm_files = list(BGM_DIR.glob("*.mp3")) + list(BGM_DIR.glob("*.m4a"))
     if not bgm_files:
         print("  ℹ️  bgm/ 폴더에 mp3 없음 → BGM 없이 저장")
-        shutil.copy(str(video_path), str(out_path))
+        # BGM 없어도 -t로 길이 강제 고정
+        cmd = ["ffmpeg", "-y", "-i", str(video_path),
+               "-c", "copy", "-t", f"{dur:.3f}", str(out_path)]
+        code, _, _ = run_cmd(cmd, timeout=60)
+        if code != 0:
+            shutil.copy(str(video_path), str(out_path))
         return True
+
     bgm = random.choice(bgm_files)
-    print(f"  🎵 BGM: {bgm.name}")
-    dur = get_audio_duration(str(video_path))
+    print(f"  🎵 BGM: {bgm.name}  (영상 길이: {dur:.1f}초)")
     af  = (f"[1:a]aloop=loop=-1:size=2000000000,"
            f"atrim=0:{dur:.3f},volume={bgm_volume}[bgm];"
            f"[0:a][bgm]amix=inputs=2:duration=first:dropout_transition=3[aout]")
-    cmd = ["ffmpeg", "-y", "-i", str(video_path), "-i", str(bgm),
-           "-filter_complex", af, "-map", "0:v", "-map", "[aout]",
-           "-c:v", "copy", "-c:a", "aac", "-b:a", "128k", str(out_path)]
+    cmd = ["ffmpeg", "-y",
+           "-i", str(video_path), "-i", str(bgm),
+           "-filter_complex", af,
+           "-map", "0:v", "-map", "[aout]",
+           "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
+           "-t", f"{dur:.3f}",      # ← 영상 길이 강제 고정 (핵심)
+           str(out_path)]
     code, _, err = run_cmd(cmd, timeout=120)
     if code != 0:
         print(f"  ⚠️  BGM 실패 → 저장\n{err[-200:]}")
