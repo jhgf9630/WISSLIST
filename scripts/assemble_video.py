@@ -926,14 +926,40 @@ def assemble(script_path=None):
     print("\n[6/6] BGM 믹싱 + 최종 저장 중...")
     safe  = "".join(c for c in title[:20]
                     if c.isalnum() or c in " _-").strip()
+
+    # 정확한 최종 길이 계산
+    # (세그먼트 합 + 엔딩 2초) ÷ 1.5배속
+    total_raw     = sum(s["audio_duration"] for s in segments)
+    ending_dur    = 2.0
+    expected_dur  = (total_raw + ending_dur) / 1.5
+
+    bgm_out = TMP_DIR / "bgm_mixed.mp4" if TMP_DIR.exists() else OUTPUT_DIR / f"{safe}_bgm.mp4"
+    TMP_DIR.mkdir(exist_ok=True)
+    add_bgm(speed_out, bgm_out)
+
+    # 컨테이너 메타데이터 오류 방지를 위해 정확한 길이로 재인코딩
     final = OUTPUT_DIR / f"{safe}.mp4"
-    add_bgm(speed_out, final)
+    print(f"  ✂️  최종 길이 고정: {expected_dur:.1f}초")
+    cmd_trim = [
+        "ffmpeg", "-y",
+        "-i", str(bgm_out),
+        "-t", f"{expected_dur:.3f}",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+        "-c:a", "aac", "-b:a", "128k",
+        "-movflags", "+faststart",   # 유튜브 스트리밍 최적화
+        str(final),
+    ]
+    code, _, err = run_cmd(cmd_trim, timeout=120)
+    if code != 0:
+        print(f"  ⚠️  최종 트림 실패, BGM 버전으로 저장\n{err[-200:]}")
+        shutil.copy(str(bgm_out), str(final))
 
     shutil.rmtree(TMP_DIR, ignore_errors=True)
 
-    total_raw = sum(s["audio_duration"] for s in segments)
+    # 실제 출력 길이 확인
+    actual_dur = get_audio_duration(str(final))
     print(f"\n✅ 완성: {final}")
-    print(f"   원본: {total_raw:.1f}초 → 1.5배속 후: {total_raw/1.5:.1f}초")
+    print(f"   원본: {total_raw:.1f}초 → 1.5배속 후: {expected_dur:.1f}초  (실제: {actual_dur:.1f}초)")
     print(f"\n📋 설명란:\n{script.get('description_cta','')}")
     print(f"\n⚠️  {script.get('disclaimer','')}")
     return str(final)
