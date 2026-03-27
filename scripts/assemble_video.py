@@ -147,10 +147,18 @@ def get_audio_duration(path: str) -> float:
         return 2.0
 
 
-# ══════════════════════════════════════════════════════════════════
-# TTS
-# ══════════════════════════════════════════════════════════════════
-def make_tts(text: str, out_path: Path, voice: str = "ko-KR-SunHiNeural"):
+# ── 한국어 TTS 목소리 목록 ───────────────────────────────────────
+# edge-tts 지원 한국어 목소리
+KO_VOICES = [
+    "ko-KR-SunHiNeural",    # 밝고 친근한 여성 (기본)
+    "ko-KR-InJoonNeural",   # 차분한 남성
+    "ko-KR-HyunsuNeural",   # 활기찬 남성
+    "ko-KR-BongJinNeural",  # 중간 톤 남성
+    "ko-KR-GookMinNeural",  # 젊은 남성
+    "ko-KR-JiMinNeural",    # 젊은 여성
+    "ko-KR-SeoHyeonNeural", # 명랑한 여성
+    "ko-KR-YuJinNeural",    # 자연스러운 여성
+]
     """
     edge-tts로 TTS 생성.
     - 텍스트를 UTF-8 파일로 저장 후 --file 옵션으로 전달 (인코딩 문제 방지)
@@ -821,11 +829,13 @@ def assemble(script_path=None):
         print(f"   제품명: {product_name}  (제품 이미지 우선 매칭 활성)")
     print("=" * 55)
 
-    # ── 1. TTS ────────────────────────────────────────────────────
+    # ── 1. TTS (랜덤 목소리 선택 — 영상 당 1개 목소리 고정) ──────
     print("\n[1/6] 나레이션 생성 중...")
+    tts_voice = random.choice(KO_VOICES)
+    print(f"   🎙️  목소리: {tts_voice}")
     for i, seg in enumerate(segments):
         ap = AUDIO_DIR / f"seg_{i:02d}.mp3"
-        make_tts(seg["narration"], ap)
+        make_tts(seg["narration"], ap, voice=tts_voice)
         seg["audio_path"]     = str(ap)
         seg["audio_duration"] = get_audio_duration(str(ap))
         print(f"       → {seg['audio_duration']:.2f}초")
