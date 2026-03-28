@@ -1009,29 +1009,35 @@ def assemble(script_path=None):
     final = OUTPUT_DIR / f"{safe}.mp4"
 
     if thumb_made and thumb_clip.exists():
-        # 3단계: [0.1초 썸네일] + [본편] concat → 재인코딩
-        # -c copy 사용 금지: 오디오 스트림 불일치로 소리 깨짐 발생
-        thumb_list = TMP_DIR / "thumb_concat.txt"
-        with open(thumb_list, "w", encoding="utf-8") as f:
-            f.write(f"file '{str(thumb_clip).replace(chr(92), '/')}'\n")
-            f.write(f"file '{str(trimmed).replace(chr(92), '/')}'\n")
-
+        # 비디오 스트림 앞에 썸네일 1프레임을 filter_complex로 붙이기
+        # concat demuxer 대신 filter_complex concat 사용
+        # → 오디오 타임스탬프 연속성 보장, TTS/BGM 깨짐 없음
         cmd_final = [
             "ffmpeg", "-y",
-            "-f", "concat", "-safe", "0",
-            "-i", str(thumb_list),
+            "-i", str(thumb_clip),   # [0] 썸네일 0.1초
+            "-i", str(trimmed),      # [1] 본편
+            "-filter_complex",
+            "[0:v][1:v]concat=n=2:v=1:a=0[vout]",   # 비디오만 concat
+            "-map", "[vout]",
+            "-map", "1:a",           # 오디오는 본편 것만 그대로 사용
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-            "-c:a", "aac", "-b:a", "128k",
-            "-ar", "44100",        # 샘플레이트 통일
-            "-ac", "2",            # 채널 수 통일 (스테레오)
+            "-c:a", "copy",          # 오디오 재인코딩 없음 → 깨짐 없음
             "-r", "30",
             "-movflags", "+faststart",
             str(final),
         ]
         code_f, _, err_f = run_cmd(cmd_final, timeout=180)
         if code_f != 0:
-            print(f"  ⚠️  썸네일 concat 실패 → 썸네일 없이 저장\n{err_f[-150:]}")
-            shutil.copy(str(trimmed), str(final))
+            print(f"  ⚠️  썸네일 삽입 실패 → 썸네일 없이 저장\n{err_f[-150:]}")
+            # 폴백: 그냥 trimmed를 final로
+            cmd_fallback = [
+                "ffmpeg", "-y", "-i", str(trimmed),
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+                "-c:a", "copy", "-movflags", "+faststart", str(final),
+            ]
+            code_fb, _, _ = run_cmd(cmd_fallback, timeout=120)
+            if code_fb != 0:
+                shutil.copy(str(trimmed), str(final))
         else:
             print("  ✅ 썸네일 프레임 삽입 완료 (맨 앞 0.1초)")
     else:
@@ -1039,9 +1045,7 @@ def assemble(script_path=None):
         cmd_final = [
             "ffmpeg", "-y", "-i", str(trimmed),
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-            "-c:a", "aac", "-b:a", "128k",
-            "-ar", "44100", "-ac", "2",
-            "-movflags", "+faststart", str(final),
+            "-c:a", "copy", "-movflags", "+faststart", str(final),
         ]
         code_f, _, _ = run_cmd(cmd_final, timeout=120)
         if code_f != 0:
