@@ -14,72 +14,61 @@ echo   WISSLIST - Video Production Automation
 echo  ============================================
 echo.
 
-:: STEP 1: Product name input
+:: STEP 1: Product name
 :INPUT_PRODUCT
-set /p PRODUCT="  Product name (e.g. butterring, gel-mask): "
-if "%PRODUCT%"=="" (
-    echo  [!] Please enter a product name.
-    goto INPUT_PRODUCT
-)
+set /p PRODUCT="  Product name: "
+if "%PRODUCT%"=="" goto INPUT_PRODUCT
 echo.
 echo  [OK] Product: %PRODUCT%
 
-:: Hook type input (optional)
 echo.
-set /p HOOK="  Recent hook types used (optional, press Enter to skip. e.g. empathy,empathy): "
+set /p HOOK="  Recent hook types (optional, Enter to skip): "
 echo.
 
-:: STEP 2: Check import_here folder
+:: STEP 2: Check image using Python (no CMD encoding issues)
 echo  --------------------------------------------
 echo  [STEP 2] Check product image
 echo  --------------------------------------------
 echo.
-
-:WAIT_IMAGE
-dir /b "%IMPORT_DIR%\*.jpg" "%IMPORT_DIR%\*.jpeg" "%IMPORT_DIR%\*.png" "%IMPORT_DIR%\*.webp" "%IMPORT_DIR%\*.gif" 2>nul | findstr "." >nul
-if errorlevel 1 (
-    echo  [!] No image found in import_here folder.
-    echo.
-    echo  Please do the following, then press Enter:
-    echo  1. Save product image from Coupang
-    echo  2. Filename: %PRODUCT%.jpeg (or .png)
-    echo  3. Save to: %IMPORT_DIR%
-    echo.
-    pause
-    goto WAIT_IMAGE
-)
-
-echo  [OK] Image found
+echo  Save location: %IMPORT_DIR%
 echo.
 
-:: STEP 3: Run import_custom.py
+:WAIT_IMAGE
+python -c "import sys,os; files=[f for f in os.listdir(r'%IMPORT_DIR%') if f.lower().endswith(('.jpg','.jpeg','.png','.webp','.gif'))]; sys.exit(0 if files else 1)" 2>nul
+if errorlevel 1 (
+    echo  [!] No image found in import_here folder.
+    echo  1. Save product image to: %IMPORT_DIR%
+    echo  2. Press Enter when done.
+    pause > nul
+    goto WAIT_IMAGE
+)
+echo  [OK] Image found.
+echo.
+
+:: STEP 3: import_custom.py
 echo  --------------------------------------------
 echo  [STEP 3] Registering image...
 echo  --------------------------------------------
 echo.
 python "%SCRIPTS%\import_custom.py" --product "%PRODUCT%"
 if errorlevel 1 (
-    echo.
     echo  [ERROR] import_custom.py failed.
     pause
     exit /b 1
 )
 echo.
 
-:: STEP 4: Run generate_script.py
+:: STEP 4: generate_script.py
 echo  --------------------------------------------
 echo  [STEP 4] Generating script via API...
 echo  --------------------------------------------
 echo.
-
 if "%HOOK%"=="" (
     python "%SCRIPTS%\generate_script.py" "%PRODUCT%"
 ) else (
     python "%SCRIPTS%\generate_script.py" "%PRODUCT%" --hook "%HOOK%"
 )
-
 if errorlevel 1 (
-    echo.
     echo  [ERROR] Script generation failed.
     echo  Check ANTHROPIC_API_KEY in config.py
     pause
@@ -87,7 +76,8 @@ if errorlevel 1 (
 )
 echo.
 
-if not exist "%JSON_DIR%\today_script.json" (
+python -c "import sys,os; sys.exit(0 if os.path.exists(r'%JSON_DIR%\today_script.json') else 1)" 2>nul
+if errorlevel 1 (
     echo  [ERROR] today_script.json not created.
     pause
     exit /b 1
@@ -95,14 +85,13 @@ if not exist "%JSON_DIR%\today_script.json" (
 echo  [OK] today_script.json saved.
 echo.
 
-:: STEP 5: Run assemble_video.py
+:: STEP 5: assemble_video.py
 echo  --------------------------------------------
 echo  [STEP 5] Assembling video...
 echo  --------------------------------------------
 echo.
 python "%SCRIPTS%\assemble_video.py"
 if errorlevel 1 (
-    echo.
     echo  [ERROR] Video assembly failed.
     pause
     exit /b 1
