@@ -927,39 +927,125 @@ def assemble(script_path=None):
     safe  = "".join(c for c in title[:20]
                     if c.isalnum() or c in " _-").strip()
 
-    # 정확한 최종 길이 계산
-    # (세그먼트 합 + 엔딩 2초) ÷ 1.5배속
+    # 정확한 최종 길이 계산 (세그먼트 합 + 엔딩 2초) ÷ 1.5배속
     total_raw     = sum(s["audio_duration"] for s in segments)
     ending_dur    = 2.0
     expected_dur  = (total_raw + ending_dur) / 1.5
 
-    bgm_out = TMP_DIR / "bgm_mixed.mp4" if TMP_DIR.exists() else OUTPUT_DIR / f"{safe}_bgm.mp4"
+    bgm_out = TMP_DIR / "bgm_mixed.mp4"
     TMP_DIR.mkdir(exist_ok=True)
     add_bgm(speed_out, bgm_out)
 
-    # 컨테이너 메타데이터 오류 방지를 위해 정확한 길이로 재인코딩
-    final = OUTPUT_DIR / f"{safe}.mp4"
-    print(f"  ✂️  최종 길이 고정: {expected_dur:.1f}초")
+    # ── 본편 트림 ─────────────────────────────────────────────────
+    trimmed = TMP_DIR / "trimmed.mp4"
     cmd_trim = [
         "ffmpeg", "-y",
         "-i", str(bgm_out),
         "-t", f"{expected_dur:.3f}",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
         "-c:a", "aac", "-b:a", "128k",
-        "-movflags", "+faststart",   # 유튜브 스트리밍 최적화
-        str(final),
+        "-r", "30",
+        str(trimmed),
     ]
-    code, _, err = run_cmd(cmd_trim, timeout=120)
-    if code != 0:
-        print(f"  ⚠️  최종 트림 실패, BGM 버전으로 저장\n{err[-200:]}")
-        shutil.copy(str(bgm_out), str(final))
+    code_trim, _, err_trim = run_cmd(cmd_trim, timeout=120)
+    if code_trim != 0:
+        shutil.copy(str(bgm_out), str(trimmed))
+
+    # ── 썸네일 후보 프레임 (0.1초) ────────────────────────────────
+    # 전략: 스피드 적용된 영상에서 제품 등장 세그먼트 지점을 직접 캡처
+    # → 제품이미지/제품단독 태그가 있는 세그먼트의 시작 시각 계산
+    print("  🖼️  썸네일 후보 프레임 생성 중...")
+    thumb_png  = TMP_DIR / "thumb.png"
+    thumb_clip = TMP_DIR / "thumb_clip.mp4"
+    thumb_made = False
+
+    # 제품 등장 세그먼트 시작 시각 계산 (배속 적용 후 기준)
+    product_tags = {"제품이미지", "제품단독", "제품사용중", "식품패키지", "제품등장"}
+    cum_time = 0.0
+    thumb_seek = None
+    for seg in segments:
+        tags_set = set(seg.get("visual_tag", []))
+        if tags_set & product_tags:
+            # 배속(1.5x) 적용 후 시각, 해당 클립 중간 지점
+            thumb_seek = (cum_time + seg["audio_duration"] * 0.4) / 1.5
+            break
+        cum_time += seg["audio_duration"]
+
+    # 제품 세그먼트 없으면 전체 길이의 40% 지점
+    if thumb_seek is None:
+        thumb_seek = expected_dur * 0.4
+        print(f"     제품 세그먼트 없음 → {thumb_seek:.1f}초 지점 사용")
+    else:
+        print(f"     제품 등장 세그먼트 {thumb_seek:.1f}초 지점 캡처")
+
+    # 1단계: 해당 시각에서 PNG 한 장 추출
+    cmd_png = [
+        "ffmpeg", "-y",
+        "-ss", f"{thumb_seek:.3f}",
+        "-i", str(trimmed),
+        "-vframes", "1",
+        "-q:v", "2",
+        str(thumb_png),
+    ]
+    code_png, _, _ = run_cmd(cmd_png, timeout=30)
+
+    if code_png == 0 and thumb_png.exists():
+        # 2단계: PNG → 0.1초 무음 영상
+        cmd_thumb = [
+            "ffmpeg", "-y",
+            "-loop", "1", "-i", str(thumb_png),
+            "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+            "-c:a", "aac", "-b:a", "128k",
+            "-r", "30", "-t", "0.1",
+            "-pix_fmt", "yuv420p",
+            str(thumb_clip),
+        ]
+        code_t, _, _ = run_cmd(cmd_thumb, timeout=30)
+        if code_t == 0:
+            thumb_made = True
+            print("     ✅ 썸네일 클립 생성 완료")
+
+    final = OUTPUT_DIR / f"{safe}.mp4"
+
+    if thumb_made and thumb_clip.exists():
+        # 3단계: [0.1초 썸네일] + [본편] concat
+        # 두 클립 모두 동일 코덱/해상도/fps → 재인코딩 없이 copy
+        thumb_list = TMP_DIR / "thumb_concat.txt"
+        with open(thumb_list, "w", encoding="utf-8") as f:
+            f.write(f"file '{str(thumb_clip).replace(chr(92), '/')}'\n")
+            f.write(f"file '{str(trimmed).replace(chr(92), '/')}'\n")
+
+        cmd_final = [
+            "ffmpeg", "-y",
+            "-f", "concat", "-safe", "0",
+            "-i", str(thumb_list),
+            "-c", "copy",
+            "-movflags", "+faststart",
+            str(final),
+        ]
+        code_f, _, err_f = run_cmd(cmd_final, timeout=120)
+        if code_f != 0:
+            print(f"  ⚠️  썸네일 concat 실패 → 썸네일 없이 저장\n{err_f[-150:]}")
+            shutil.copy(str(trimmed), str(final))
+        else:
+            print("  ✅ 썸네일 프레임 삽입 완료 (맨 앞 0.1초)")
+    else:
+        print("  ⚠️  썸네일 생성 실패 → 본편만 저장")
+        cmd_final = [
+            "ffmpeg", "-y", "-i", str(trimmed),
+            "-c", "copy", "-movflags", "+faststart", str(final),
+        ]
+        code_f, _, _ = run_cmd(cmd_final, timeout=60)
+        if code_f != 0:
+            shutil.copy(str(trimmed), str(final))
 
     shutil.rmtree(TMP_DIR, ignore_errors=True)
 
-    # 실제 출력 길이 확인
     actual_dur = get_audio_duration(str(final))
     print(f"\n✅ 완성: {final}")
-    print(f"   원본: {total_raw:.1f}초 → 1.5배속 후: {expected_dur:.1f}초  (실제: {actual_dur:.1f}초)")
+    print(f"   원본: {total_raw:.1f}초 → 1.5배속 후: {expected_dur:.1f}초 + 썸네일 0.1초")
+    print(f"   실제 길이: {actual_dur:.1f}초")
     print(f"\n📋 설명란:\n{script.get('description_cta','')}")
     print(f"\n⚠️  {script.get('disclaimer','')}")
     return str(final)
