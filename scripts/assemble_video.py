@@ -792,7 +792,7 @@ def apply_speed(in_path: Path, out_path: Path, speed: float = 1.5) -> bool:
     return True
 
 
-def add_bgm(video_path: Path, out_path: Path, bgm_volume: float = 0.15) -> bool:
+def add_bgm(video_path: Path, out_path: Path, bgm_volume: float = 0.25) -> bool:
     # 실제 영상 길이 먼저 측정
     dur = get_audio_duration(str(video_path))
 
