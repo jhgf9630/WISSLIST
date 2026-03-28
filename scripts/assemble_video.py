@@ -1009,8 +1009,8 @@ def assemble(script_path=None):
     final = OUTPUT_DIR / f"{safe}.mp4"
 
     if thumb_made and thumb_clip.exists():
-        # 3단계: [0.1초 썸네일] + [본편] concat
-        # 두 클립 모두 동일 코덱/해상도/fps → 재인코딩 없이 copy
+        # 3단계: [0.1초 썸네일] + [본편] concat → 재인코딩
+        # -c copy 사용 금지: 오디오 스트림 불일치로 소리 깨짐 발생
         thumb_list = TMP_DIR / "thumb_concat.txt"
         with open(thumb_list, "w", encoding="utf-8") as f:
             f.write(f"file '{str(thumb_clip).replace(chr(92), '/')}'\n")
@@ -1020,11 +1020,15 @@ def assemble(script_path=None):
             "ffmpeg", "-y",
             "-f", "concat", "-safe", "0",
             "-i", str(thumb_list),
-            "-c", "copy",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+            "-c:a", "aac", "-b:a", "128k",
+            "-ar", "44100",        # 샘플레이트 통일
+            "-ac", "2",            # 채널 수 통일 (스테레오)
+            "-r", "30",
             "-movflags", "+faststart",
             str(final),
         ]
-        code_f, _, err_f = run_cmd(cmd_final, timeout=120)
+        code_f, _, err_f = run_cmd(cmd_final, timeout=180)
         if code_f != 0:
             print(f"  ⚠️  썸네일 concat 실패 → 썸네일 없이 저장\n{err_f[-150:]}")
             shutil.copy(str(trimmed), str(final))
@@ -1034,9 +1038,12 @@ def assemble(script_path=None):
         print("  ⚠️  썸네일 생성 실패 → 본편만 저장")
         cmd_final = [
             "ffmpeg", "-y", "-i", str(trimmed),
-            "-c", "copy", "-movflags", "+faststart", str(final),
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+            "-c:a", "aac", "-b:a", "128k",
+            "-ar", "44100", "-ac", "2",
+            "-movflags", "+faststart", str(final),
         ]
-        code_f, _, _ = run_cmd(cmd_final, timeout=60)
+        code_f, _, _ = run_cmd(cmd_final, timeout=120)
         if code_f != 0:
             shutil.copy(str(trimmed), str(final))
 
