@@ -36,12 +36,8 @@ echo  --------------------------------------------
 echo.
 
 :WAIT_IMAGE
-set FILE_COUNT=0
-pushd "%IMPORT_DIR%" 2>nul
-for %%f in (*.jpg *.jpeg *.png *.webp *.gif) do set /a FILE_COUNT+=1
-popd
-
-if %FILE_COUNT%==0 (
+dir /b "%IMPORT_DIR%\*.jpg" "%IMPORT_DIR%\*.jpeg" "%IMPORT_DIR%\*.png" "%IMPORT_DIR%\*.webp" "%IMPORT_DIR%\*.gif" 2>nul | findstr "." >nul
+if errorlevel 1 (
     echo  [!] No image found in import_here folder.
     echo.
     echo  Please do the following, then press Enter:
@@ -53,7 +49,7 @@ if %FILE_COUNT%==0 (
     goto WAIT_IMAGE
 )
 
-echo  [OK] %FILE_COUNT% image(s) found
+echo  [OK] Image found
 echo.
 
 :: STEP 3: Run import_custom.py
