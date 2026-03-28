@@ -37,7 +37,9 @@ echo.
 
 :WAIT_IMAGE
 set FILE_COUNT=0
-for %%f in ("%IMPORT_DIR%\*.jpg" "%IMPORT_DIR%\*.jpeg" "%IMPORT_DIR%\*.png" "%IMPORT_DIR%\*.webp") do set /a FILE_COUNT+=1
+pushd "%IMPORT_DIR%" 2>nul
+for %%f in (*.jpg *.jpeg *.png *.webp *.gif) do set /a FILE_COUNT+=1
+popd
 
 if %FILE_COUNT%==0 (
     echo  [!] No image found in import_here folder.
