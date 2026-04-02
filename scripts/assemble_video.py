@@ -89,19 +89,52 @@ BOX_Y     = int(TARGET_H * 0.37)   # 이미지 박스 시작: 710px
 BOX_W     = TARGET_W - 80          # 1000px
 BOX_H     = int(TARGET_H * 0.53)   # 이미지 박스 높이: 1018px (37~90%)
 
-# 배경색 (레퍼런스: 밝은 크림/베이지)
+# 배경색
 BG_COLOR   = (245, 242, 235)
 ACCENT     = (50,  50,  50)
 
+# ══════════════════════════════════════════════════════════════════
+# ▼▼▼ 폰트 및 글자 크기 설정 — 여기서 수정하세요 ▼▼▼
+# ══════════════════════════════════════════════════════════════════
+# assets\fonts 폴더에 폰트 파일(.ttf/.otf)을 넣으면 자동으로 우선 사용됩니다.
+# 폴더에 여러 개 있을 경우 알파벳 순 첫 번째 파일 사용.
+# 없으면 아래 FONT_CANDIDATES 목록에서 순서대로 시도합니다.
+
+TITLE_FONT_SIZE    = 54   # 상단 제목 글자 크기 (픽셀)
+SUBTITLE_FONT_SIZE = 52   # 자막 글자 크기 (픽셀)
+
 FONT_CANDIDATES = [
-    r"C:\Windows\Fonts\malgunbd.ttf",
-    r"C:\Windows\Fonts\malgun.ttf",
-    r"C:\Windows\Fonts\gulim.ttc",
-    r"C:\Windows\Fonts\arial.ttf",
+    r"C:\Windows\Fonts\malgunbd.ttf",   # 맑은 고딕 Bold
+    r"C:\Windows\Fonts\malgun.ttf",     # 맑은 고딕
+    r"C:\Windows\Fonts\gulim.ttc",      # 굴림
+    r"C:\Windows\Fonts\arial.ttf",      # Arial (폴백)
 ]
+# ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+
+
+def _find_custom_font() -> str | None:
+    """assets/fonts 폴더에서 폰트 파일 자동 탐색"""
+    fonts_dir = Path(BASE_DIR) / "assets" / "fonts"
+    if not fonts_dir.exists():
+        return None
+    for ext in (".ttf", ".otf", ".TTF", ".OTF"):
+        found = sorted(fonts_dir.glob(f"*{ext}"))
+        if found:
+            print(f"✅ 커스텀 폰트 감지: {found[0].name}")
+            return str(found[0])
+    return None
+
+_CUSTOM_FONT = _find_custom_font()
 
 
 def get_font(size: int):
+    # 커스텀 폰트 우선 적용
+    if _CUSTOM_FONT:
+        try:
+            return ImageFont.truetype(_CUSTOM_FONT, size)
+        except Exception:
+            pass
+    # 커스텀 없으면 Windows 기본 폰트 순서대로
     for fp in FONT_CANDIDATES:
         if Path(fp).exists():
             try:
@@ -154,19 +187,93 @@ KO_VOICES = [
     "ko-KR-HyunsuNeural",   # 활기찬 남성
 ]
 
+# ── TTS 엔진 선택 ─────────────────────────────────────────────────
+# "edge"       : edge-tts (무료, 기본, 무난한 품질)
+# "google"     : Google Cloud TTS (고품질, 무료 100만자/월)
+#                → config.py에 GOOGLE_TTS_KEY = "API키" 필요
+#                → 발급: console.cloud.google.com → Text-to-Speech API
+TTS_ENGINE = "edge"   # ← "edge" 또는 "google" 으로 변경
+
+# Google TTS 사용 시 목소리 설정
+GOOGLE_TTS_VOICE    = "ko-KR-Neural2-C"   # 남성 Neural2 (최고품질)
+# 여성 옵션: "ko-KR-Neural2-A", "ko-KR-Neural2-B"
+# 남성 옵션: "ko-KR-Neural2-C", "ko-KR-Neural2-D"
+GOOGLE_TTS_SPEED    = 1.05   # 재생 속도 (1.0=보통, 1.1=약간 빠름)
+GOOGLE_TTS_PITCH    = 0.0    # 피치 (-5.0 ~ 5.0, 0=보통)
+
 
 # ══════════════════════════════════════════════════════════════════
 # TTS
 # ══════════════════════════════════════════════════════════════════
+def make_tts_google(text: str, out_path: Path):
+    """
+    Google Cloud TTS (Neural2 — edge-tts보다 훨씬 자연스러운 품질).
+    무료 티어: 월 100만 글자 (Neural2 기준 월 100만자).
+    발급: console.cloud.google.com → Text-to-Speech API 활성화 → API 키 생성
+    config.py에 GOOGLE_TTS_KEY = "발급받은키" 추가 필요.
+    """
+    import base64
+    try:
+        from config import GOOGLE_TTS_KEY
+    except ImportError:
+        raise RuntimeError(
+            "config.py에 GOOGLE_TTS_KEY가 없습니다.\n"
+            "console.cloud.google.com에서 Text-to-Speech API 키를 발급 후 추가하세요."
+        )
+
+    import requests as req
+    url = f"https://texttospeech.googleapis.com/v1/text:synthesize?key={GOOGLE_TTS_KEY}"
+    body = {
+        "input": {"text": text},
+        "voice": {
+            "languageCode": "ko-KR",
+            "name": GOOGLE_TTS_VOICE,
+        },
+        "audioConfig": {
+            "audioEncoding": "MP3",
+            "speakingRate": GOOGLE_TTS_SPEED,
+            "pitch": GOOGLE_TTS_PITCH,
+        },
+    }
+    resp = req.post(url, json=body, timeout=30)
+    if resp.status_code != 200:
+        raise RuntimeError(
+            f"Google TTS 오류 {resp.status_code}: {resp.text[:300]}\n"
+            f"GOOGLE_TTS_KEY 확인 또는 Text-to-Speech API 활성화 필요"
+        )
+    audio_b64 = resp.json().get("audioContent", "")
+    if not audio_b64:
+        raise RuntimeError("Google TTS: 오디오 데이터가 비어있습니다.")
+    out_path.write_bytes(base64.b64decode(audio_b64))
+
+
 def make_tts(text: str, out_path: Path, voice: str = "ko-KR-SunHiNeural"):
     """
-    edge-tts로 TTS 생성.
-    - 텍스트를 UTF-8 파일로 저장 후 --file 옵션으로 전달 (인코딩 문제 방지)
-    - 네트워크 오류 등에 대비해 최대 3회 재시도
-    - 재시도 사이 1초 대기 (edge-tts 서버 rate limit 방지)
+    TTS 생성. TTS_ENGINE 변수에 따라 엔진 선택:
+      "edge"   → edge-tts CLI (무료, 기본)
+      "google" → Google Cloud TTS Neural2 (고품질, 월 100만자 무료)
     """
     import time
 
+    if TTS_ENGINE == "google":
+        for attempt in range(3):
+            if attempt > 0:
+                time.sleep(1.5)
+                print(f"  🔄 Google TTS 재시도 {attempt+1}/3...")
+            try:
+                make_tts_google(text, out_path)
+                if out_path.exists() and out_path.stat().st_size > 1000:
+                    break
+            except Exception as e:
+                last_err = str(e)
+                if attempt == 2:
+                    raise RuntimeError(f"Google TTS 3회 실패: {last_err[:200]}")
+        size_kb = out_path.stat().st_size // 1024
+        print(f"  🎙️  {out_path.name}  ({size_kb}KB) [Google Neural2]")
+        time.sleep(0.1)
+        return
+
+    # ── edge-tts ─────────────────────────────────────────────────
     txt_path = out_path.with_suffix(".txt")
     txt_path.write_text(text, encoding="utf-8")
 
@@ -183,12 +290,10 @@ def make_tts(text: str, out_path: Path, voice: str = "ko-KR-SunHiNeural"):
             time.sleep(1.5)
             print(f"  🔄 TTS 재시도 {attempt+1}/3...")
 
-        # 1차: edge-tts CLI
         code, _, err = run_cmd(["edge-tts"] + base_args, timeout=40)
         if code == 0 and out_path.exists() and out_path.stat().st_size > 1000:
             break
 
-        # 2차: python -m edge_tts
         code2, _, err2 = run_cmd(
             [sys.executable, "-m", "edge_tts"] + base_args, timeout=40)
         if code2 == 0 and out_path.exists() and out_path.stat().st_size > 1000:
@@ -196,7 +301,6 @@ def make_tts(text: str, out_path: Path, voice: str = "ko-KR-SunHiNeural"):
 
         last_err = err2 or err
     else:
-        # 3회 모두 실패
         try:
             txt_path.unlink()
         except Exception:
@@ -205,10 +309,7 @@ def make_tts(text: str, out_path: Path, voice: str = "ko-KR-SunHiNeural"):
             f"TTS 생성 실패 (3회 재시도 초과).\n"
             f"텍스트: {text[:50]}\n"
             f"오류: {last_err[:300]}\n\n"
-            f"해결 방법:\n"
-            f"  1. 인터넷 연결 확인\n"
-            f"  2. pip install --upgrade edge-tts\n"
-            f"  3. 잠시 후 다시 실행"
+            f"해결: pip install --upgrade edge-tts"
         )
 
     try:
@@ -218,7 +319,7 @@ def make_tts(text: str, out_path: Path, voice: str = "ko-KR-SunHiNeural"):
 
     size_kb = out_path.stat().st_size // 1024
     print(f"  🎙️  {out_path.name}  ({size_kb}KB)")
-    time.sleep(0.3)  # 연속 요청 간 짧은 딜레이
+    time.sleep(0.3)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -280,7 +381,7 @@ def make_bg_frame(title: str, out_path: Path):
     draw.rectangle([0, HEADER_H-5, TARGET_W, HEADER_H], fill=(180, 140, 255))
 
     # 타이틀 텍스트
-    title_font = get_font(54)
+    title_font = get_font(TITLE_FONT_SIZE)
     t_lines    = wrap_text(draw, title, title_font, TARGET_W - 80)
     lh         = draw.textbbox((0,0), "가", font=title_font)[3] + 16
     t_total    = lh * len(t_lines)
@@ -324,7 +425,7 @@ def make_subtitle_png(text: str, out_path: Path):
     img  = Image.new("RGBA", (TARGET_W, TARGET_H), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
-    sub_font  = get_font(52)
+    sub_font  = get_font(SUBTITLE_FONT_SIZE)
     area_h    = SUB_BOT - SUB_TOP
     sub_lines = wrap_text(draw, text, sub_font, TARGET_W - 80)
     slh       = draw.textbbox((0,0), "가", font=sub_font)[3] + 16
@@ -427,14 +528,26 @@ def find_media_candidates(visual_tags: list, exclude_files: set = None,
         (scored_gif if item["file"].lower().endswith(".gif")
          else scored_other).append((score, item))
 
-    # GIF 우선 풀 구성
-    if prefer_gif and scored_gif:
-        # GIF 상위 + 일반 나머지 순서
-        scored_gif.sort(key=lambda x: -x[0])
-        scored_other.sort(key=lambda x: -x[0])
-        pool = scored_gif + scored_other
+    # GIF 우선 풀 구성 + 동점 항목 내에서 랜덤 셔플
+    # GIF는 이미지보다 점수를 +1 보너스 적용 → 동점이어도 GIF가 항상 앞에
+    if prefer_gif:
+        pool = [(s + 1, item) if item["file"].lower().endswith(".gif")
+                else (s, item)
+                for s, item in (scored_gif + scored_other)]
     else:
-        pool = sorted(scored_gif + scored_other, key=lambda x: -x[0])
+        pool = scored_gif + scored_other
+
+    pool.sort(key=lambda x: -x[0])
+
+    # ── 동점 그룹 내 랜덤 셔플 (같은 점수면 매번 다른 파일 선택) ──
+    if pool:
+        from itertools import groupby
+        shuffled_pool = []
+        for _, group in groupby(pool, key=lambda x: x[0]):
+            grp = list(group)
+            random.shuffle(grp)
+            shuffled_pool.extend(grp)
+        pool = shuffled_pool
 
     for _, item in pool[:max_candidates]:
         candidates.append(item)
@@ -744,7 +857,7 @@ def _overlay_text_on_custom_bg(bg_path: str, title: str, narration: str,
     draw = ImageDraw.Draw(bg)
 
     # 상단 제목
-    title_font = get_font(54)
+    title_font = get_font(TITLE_FONT_SIZE)
     t_lines    = wrap_text(draw, title, title_font, TARGET_W - 80)
     lh         = draw.textbbox((0,0), "가", font=title_font)[3] + 16
     t_total    = lh * len(t_lines)
@@ -792,14 +905,16 @@ def apply_speed(in_path: Path, out_path: Path, speed: float = 1.5) -> bool:
     return True
 
 
-def add_bgm(video_path: Path, out_path: Path, bgm_volume: float = 0.25) -> bool:
+def add_bgm(video_path: Path, out_path: Path,
+            bgm_volume: float = 0.15, chosen_bgm: Path = None) -> bool:
     # 실제 영상 길이 먼저 측정
     dur = get_audio_duration(str(video_path))
 
-    bgm_files = list(BGM_DIR.glob("*.mp3")) + list(BGM_DIR.glob("*.m4a"))
-    if not bgm_files:
-        print("  ℹ️  bgm/ 폴더에 mp3 없음 → BGM 없이 저장")
-        # BGM 없어도 -t로 길이 강제 고정
+    bgm_files = sorted(list(BGM_DIR.glob("*.mp3")) + list(BGM_DIR.glob("*.m4a")))
+
+    # chosen_bgm이 None이면 랜덤, 0이면 BGM 없음
+    if chosen_bgm is False or (chosen_bgm is None and not bgm_files):
+        print("  ℹ️  BGM 없이 저장")
         cmd = ["ffmpeg", "-y", "-i", str(video_path),
                "-c", "copy", "-t", f"{dur:.3f}", str(out_path)]
         code, _, _ = run_cmd(cmd, timeout=60)
@@ -807,7 +922,7 @@ def add_bgm(video_path: Path, out_path: Path, bgm_volume: float = 0.25) -> bool:
             shutil.copy(str(video_path), str(out_path))
         return True
 
-    bgm = random.choice(bgm_files)
+    bgm = chosen_bgm if chosen_bgm else random.choice(bgm_files)
     print(f"  🎵 BGM: {bgm.name}  (영상 길이: {dur:.1f}초)")
     af  = (f"[1:a]aloop=loop=-1:size=2000000000,"
            f"atrim=0:{dur:.3f},volume={bgm_volume}[bgm];"
@@ -829,7 +944,7 @@ def add_bgm(video_path: Path, out_path: Path, bgm_volume: float = 0.25) -> bool:
 # ══════════════════════════════════════════════════════════════════
 # 메인
 # ══════════════════════════════════════════════════════════════════
-def assemble(script_path=None):
+def assemble(script_path=None, chosen_voice=None, chosen_bgm=None):
     check_ffmpeg()
 
     if script_path is None:
@@ -845,7 +960,7 @@ def assemble(script_path=None):
         d.mkdir(exist_ok=True)
 
     title        = script.get("title", "WISSLIST")
-    product_name = script.get("product_name", "")   # generate_script.py가 자동 기입
+    product_name = script.get("product_name", "")
     segments     = script["segments"]
 
     print(f"\n🎬 조립 시작: {title}")
@@ -853,9 +968,10 @@ def assemble(script_path=None):
         print(f"   제품명: {product_name}  (제품 이미지 우선 매칭 활성)")
     print("=" * 55)
 
-    # ── 1. TTS (랜덤 목소리 선택 — 영상 당 1개 목소리 고정) ──────
+    # ── 1. TTS ────────────────────────────────────────────────────
     print("\n[1/6] 나레이션 생성 중...")
-    tts_voice = random.choice(KO_VOICES)
+    # 선택된 목소리 없으면 랜덤
+    tts_voice = chosen_voice or random.choice(KO_VOICES)
     print(f"   🎙️  목소리: {tts_voice}")
     for i, seg in enumerate(segments):
         ap = AUDIO_DIR / f"seg_{i:02d}.mp3"
@@ -934,7 +1050,7 @@ def assemble(script_path=None):
 
     bgm_out = TMP_DIR / "bgm_mixed.mp4"
     TMP_DIR.mkdir(exist_ok=True)
-    add_bgm(speed_out, bgm_out)
+    add_bgm(speed_out, bgm_out, chosen_bgm=chosen_bgm)
 
     # ── 본편 트림 ─────────────────────────────────────────────────
     trimmed = TMP_DIR / "trimmed.mp4"
@@ -1063,4 +1179,89 @@ def assemble(script_path=None):
 
 
 if __name__ == "__main__":
-    assemble()
+    # ── 목소리 선택 메뉴 ─────────────────────────────────────────
+    print("\n============================================")
+    print(" WISSLIST - 영상 조립")
+    print("============================================")
+
+    if TTS_ENGINE == "google":
+        voice_options = [
+            ("ko-KR-Neural2-A", "여성 A (Neural2, 고품질)"),
+            ("ko-KR-Neural2-B", "여성 B (Neural2, 고품질)"),
+            ("ko-KR-Neural2-C", "남성 C (Neural2, 고품질)"),
+            ("ko-KR-Neural2-D", "남성 D (Neural2, 고품질)"),
+        ]
+    else:
+        voice_options = [
+            ("ko-KR-SunHiNeural",  "SunHi  — 밝고 친근한 여성"),
+            ("ko-KR-InJoonNeural", "InJoon — 차분한 남성"),
+            ("ko-KR-HyunsuNeural", "Hyunsu — 활기찬 남성"),
+            ("random",             "랜덤 선택"),
+        ]
+
+    print("\n🎙️  목소리 선택:")
+    for i, (_, label) in enumerate(voice_options, 1):
+        print(f"  {i}. {label}")
+
+    chosen_voice = None
+    while True:
+        try:
+            v = input(f"\n번호 입력 (기본값: {len(voice_options)}) : ").strip()
+            if v == "":
+                idx = len(voice_options) - 1
+            else:
+                idx = int(v) - 1
+            if 0 <= idx < len(voice_options):
+                chosen_voice = voice_options[idx][0]
+                if chosen_voice == "random":
+                    chosen_voice = random.choice(KO_VOICES)
+                    print(f"  → 랜덤 선택: {chosen_voice}")
+                else:
+                    print(f"  → 선택: {voice_options[idx][1]}")
+                break
+        except (ValueError, KeyboardInterrupt):
+            pass
+        print("  올바른 번호를 입력하세요.")
+
+    # ── BGM 선택 메뉴 ─────────────────────────────────────────────
+    BGM_DIR.mkdir(exist_ok=True)
+    bgm_files = sorted(list(BGM_DIR.glob("*.mp3")) + list(BGM_DIR.glob("*.m4a")))
+
+    chosen_bgm = None
+    if bgm_files:
+        print(f"\n🎵  BGM 선택:")
+        for i, f in enumerate(bgm_files, 1):
+            print(f"  {i}. {f.name}")
+        print(f"  {len(bgm_files)+1}. 랜덤 선택")
+        print(f"  0. BGM 없음")
+
+        while True:
+            try:
+                b = input(f"\n번호 입력 (기본값: 랜덤) : ").strip()
+                if b == "":
+                    chosen_bgm = random.choice(bgm_files)
+                    print(f"  → 랜덤: {chosen_bgm.name}")
+                    break
+                bi = int(b)
+                if bi == 0:
+                    chosen_bgm = None
+                    print("  → BGM 없음")
+                    break
+                elif 1 <= bi <= len(bgm_files):
+                    chosen_bgm = bgm_files[bi - 1]
+                    print(f"  → 선택: {chosen_bgm.name}")
+                    break
+                elif bi == len(bgm_files) + 1:
+                    chosen_bgm = random.choice(bgm_files)
+                    print(f"  → 랜덤: {chosen_bgm.name}")
+                    break
+            except (ValueError, KeyboardInterrupt):
+                pass
+            print("  올바른 번호를 입력하세요.")
+    else:
+        print("\n🎵  bgm/ 폴더에 mp3 없음 → BGM 없이 진행")
+
+    print("\n============================================\n")
+
+    # ── assemble 호출 시 선택값 전달 ──────────────────────────────
+    assemble(chosen_voice=chosen_voice, chosen_bgm=chosen_bgm)
