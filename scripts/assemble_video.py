@@ -274,6 +274,12 @@ def make_tts(text: str, out_path: Path, voice: str = "ko-KR-SunHiNeural"):
         return
 
     # ── edge-tts ─────────────────────────────────────────────────
+    # 이미 생성된 파일이 있으면 재사용 (캐시)
+    if out_path.exists() and out_path.stat().st_size > 1000:
+        size_kb = out_path.stat().st_size // 1024
+        print(f"  🎙️  {out_path.name}  ({size_kb}KB) [캐시]")
+        return
+
     txt_path = out_path.with_suffix(".txt")
     txt_path.write_text(text, encoding="utf-8")
 
@@ -284,22 +290,22 @@ def make_tts(text: str, out_path: Path, voice: str = "ko-KR-SunHiNeural"):
         "--write-media", str(out_path),
     ]
 
+    # python -m edge_tts 만 사용 (edge-tts CLI는 환경에 따라 불안정)
     last_err = ""
     for attempt in range(3):
         if attempt > 0:
-            time.sleep(1.5)
-            print(f"  🔄 TTS 재시도 {attempt+1}/3...")
+            wait = 3.0 * attempt   # 1차: 3초, 2차: 6초
+            print(f"  🔄 TTS 재시도 {attempt+1}/3... ({wait:.0f}초 대기)")
+            time.sleep(wait)
+        # 이전 실패 파일 제거
+        if out_path.exists():
+            out_path.unlink()
 
-        code, _, err = run_cmd(["edge-tts"] + base_args, timeout=40)
+        code, _, err = run_cmd(
+            [sys.executable, "-m", "edge_tts"] + base_args, timeout=60)
         if code == 0 and out_path.exists() and out_path.stat().st_size > 1000:
             break
-
-        code2, _, err2 = run_cmd(
-            [sys.executable, "-m", "edge_tts"] + base_args, timeout=40)
-        if code2 == 0 and out_path.exists() and out_path.stat().st_size > 1000:
-            break
-
-        last_err = err2 or err
+        last_err = err
     else:
         try:
             txt_path.unlink()
@@ -319,7 +325,7 @@ def make_tts(text: str, out_path: Path, voice: str = "ko-KR-SunHiNeural"):
 
     size_kb = out_path.stat().st_size // 1024
     print(f"  🎙️  {out_path.name}  ({size_kb}KB)")
-    time.sleep(0.3)
+    time.sleep(0.8)   # 연속 요청 간격 0.3 → 0.8초로 증가
 
 
 # ══════════════════════════════════════════════════════════════════
